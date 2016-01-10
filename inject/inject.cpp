@@ -7,11 +7,27 @@
 #include <algorithm>
 #include "resource.h"
 #include "../inject_stub/resource.h"
+#include "../inject_stub/stub_defs.h"
+
+#ifdef _M_AMD64
+#define TRAMPLONE_SIZE sizeof(TRAMPLONE64)
+#else
+#define TRAMPLONE_SIZE sizeof(TRAMPLONE32)
+#endif
 
 using namespace std;
 
 typedef pair<string, unsigned int> procedure;
 typedef vector< procedure > procedure_container;
+
+typedef struct _export_container_t {
+	DWORD base;
+	DWORD func_count;
+	vector< bool > func_map;
+	string name;
+	vector< string > names;
+	vector< WORD > ords;
+} export_container_t, *pexport_container_t;
 
 void get_file_name(string& path, string& name)
 {
@@ -126,13 +142,15 @@ void unmap_file_section(void* view)
 	UnmapViewOfFile(view);
 }
 
-bool get_import_list(string& path, string& lib, procedure_container& imports)
-{//TODO: add delay import
+bool get_export_table(string& path, export_container_t& exports)
+{
 	void* hmod = NULL;
 	bool result = false;
 	PIMAGE_DOS_HEADER pdos;
 	PIMAGE_OPTIONAL_HEADER popt;
-	PIMAGE_IMPORT_DESCRIPTOR pimp, pentry;
+	PIMAGE_EXPORT_DIRECTORY pexp;
+	PDWORD pnames, pfuncs;
+	PWORD pords;
 
 	do {
 
@@ -148,32 +166,32 @@ bool get_import_list(string& path, string& lib, procedure_container& imports)
 
 		popt = (PIMAGE_OPTIONAL_HEADER)(pdos->e_lfanew + (UINT_PTR)hmod + 4 + sizeof(IMAGE_FILE_HEADER));
 
-		if (!popt->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress) {
-			cout << "Error, image doesn't have import directory" << endl;
+		if (!popt->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress) {
+			cout << "Error, image doesn't have export directory" << endl;
 			break;
 		}
 
-		pimp = (PIMAGE_IMPORT_DESCRIPTOR)(popt->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress + (UINT_PTR)hmod);
+		pexp = (PIMAGE_EXPORT_DIRECTORY)(popt->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress + (UINT_PTR)hmod);
 
-		pentry = NULL;
-		for (int i = 0; pimp[i].Name; i++) {
-			char* imp_lib = (char*)((UINT_PTR)hmod + pimp[i].Name);
-			if (!strcmpi(lib.c_str(), imp_lib)) {
-				pentry = pimp + i;
-				break;
-			}
+		exports.base = pexp->Base;
+		exports.func_count = pexp->NumberOfFunctions;
+
+		pnames = (PDWORD)(pexp->AddressOfNames + (UINT_PTR)hmod);
+		pfuncs = (PDWORD)(pexp->AddressOfFunctions + (UINT_PTR)hmod);
+		pords  = (PWORD)(pexp->AddressOfNameOrdinals + (UINT_PTR)hmod);
+
+		exports.names.reserve(pexp->NumberOfNames);
+		exports.ords.reserve(pexp->NumberOfNames);
+
+		for (DWORD i = 0; i < pexp->NumberOfNames; i++) {
+			exports.ords.push_back( pords[i] );
+			exports.names.push_back( pnames[i] ? (LPSTR)(pnames[i] + (UINT_PTR)hmod) : "" );
 		}
 
-		if (!pentry) {
-			cout << "Error, import entry doesn't found" << endl;
-			break;
-		}
-
-		PULONG_PTR name_table = (PULONG_PTR)(pentry->OriginalFirstThunk + (UINT_PTR)hmod);
-		for (int i = 0; name_table[i]; i++) {
-			PIMAGE_IMPORT_BY_NAME pimp_name = (PIMAGE_IMPORT_BY_NAME)((UINT_PTR)hmod + name_table[i]);
-			char* imp_proc_name = (char*)pimp_name->Name;
-			imports.push_back( procedure(imp_proc_name, pimp_name->Hint) );
+		exports.func_map.insert(exports.func_map.begin(), exports.func_count, false);
+		for (DWORD i = 0; i < exports.func_count; i++) {
+			if (pfuncs[i])
+				exports.func_map[i] = true;
 		}
 
 		result = true;
@@ -182,7 +200,7 @@ bool get_import_list(string& path, string& lib, procedure_container& imports)
 
 	if (hmod)
 		unmap_file_section(hmod);
-	
+
 	return result;
 }
 
@@ -273,13 +291,12 @@ bool compare_procedure_hint(procedure& proc1, procedure& proc2)
 	return (proc1.second < proc2.second);
 }
 
-bool gen_export_dir(procedure_container& exports, string& name, DWORD dir_rva, string& dir_buffer_output, PDWORD exp_size)
+bool gen_export_dir(export_container_t& exports, string& name, DWORD dir_rva, string& dir_buffer_output, PDWORD exp_size)
 {
-	enum { TRAMPLONE_STUB_SIZE = 32 };
+	enum { TRAMPLONE_STUB_SIZE = TRAMPLONE_SIZE };
 	PIMAGE_EXPORT_DIRECTORY pexport;
 	DWORD offset = 0, name_offset, func_offset, ord_offset, names_offset, tramp_offset;
-	DWORD function_count, ords_count;// = exports.size();
-	procedure_container::iterator it;
+	vector< string >::iterator it;
 	vector<DWORD> proc_offsets;
 	vector<DWORD>::iterator it2;
 	LPCSTR pbuf;
@@ -290,49 +307,40 @@ bool gen_export_dir(procedure_container& exports, string& name, DWORD dir_rva, s
 	dir_buffer_output.clear();
 	dir_buffer_output.reserve(0x1000);
 
-	sort(exports.begin(), exports.end(), compare_procedure_hint);
-
-	// Calc count of functions
-
-	function_count = 0;
-	ords_count = exports.size();
-
-	for (it = exports.begin(); it != exports.end(); it++)
-		if (function_count < it->second)
-			function_count = it->second;
-
-	function_count++;
-
-	if (function_count < ords_count)
-		function_count = ords_count;
-
 	// Prepare buffer space
 
 	offset = fill_rounded(dir_buffer_output, sizeof(IMAGE_EXPORT_DIRECTORY));
 
 	func_offset = offset;
-	offset = fill_rounded(dir_buffer_output, sizeof(DWORD) * function_count);
+	offset = fill_rounded(dir_buffer_output, sizeof(DWORD) * exports.func_count);
 
 	names_offset = offset;
-	offset = fill_rounded(dir_buffer_output, sizeof(DWORD) * ords_count);
+	offset = fill_rounded(dir_buffer_output, sizeof(DWORD) * exports.ords.size());
 
 	ord_offset = offset;
-	offset = fill_rounded(dir_buffer_output, sizeof(WORD) * ords_count, sizeof(WORD));
+	offset = fill_rounded(dir_buffer_output, sizeof(WORD) * exports.names.size(), sizeof(WORD));
 
 	name_offset = offset;
-	offset = append_rounded(dir_buffer_output, name.c_str(), name.length() + 1, sizeof(BYTE));
+	offset = append_rounded(dir_buffer_output, name.c_str(), name.size() + 1, sizeof(BYTE));
 
 	// Pack export names
 
-	for (it = exports.begin(); it != exports.end(); it++) {
-		string& str = it->first;
+	proc_offsets.reserve( exports.names.size() );
+
+	for (i = 0; i < exports.names.size(); i++) {
+		string& str = exports.names[i];
+
+		if (str == "") {
+			proc_offsets.push_back(0);
+			continue;
+		}
 
 		proc_offsets.push_back(offset);
 		offset = append_rounded(dir_buffer_output, str.c_str(), str.length() + 1, sizeof(BYTE));
 	}
 
 	tramp_offset = offset;
-	offset = fill_rounded(dir_buffer_output, TRAMPLONE_STUB_SIZE * function_count);
+	offset = fill_rounded(dir_buffer_output, TRAMPLONE_STUB_SIZE * exports.func_count);
 
 	pbuf = dir_buffer_output.c_str();
 
@@ -341,21 +349,25 @@ bool gen_export_dir(procedure_container& exports, string& name, DWORD dir_rva, s
 	pnames =  (PDWORD)(pbuf + names_offset);
 	pords =   (PWORD) (pbuf + ord_offset);
 
-	pexport->Base = 1;
+	pexport->Base = exports.base;
 	pexport->Name = dir_rva + name_offset;
 	pexport->AddressOfFunctions = dir_rva + func_offset;
 	pexport->AddressOfNames = dir_rva + names_offset;
 	pexport->AddressOfNameOrdinals = dir_rva + ord_offset;
-	pexport->NumberOfFunctions = function_count;
-	pexport->NumberOfNames = ords_count;
+	pexport->NumberOfFunctions = exports.func_count;
+	pexport->NumberOfNames = exports.ords.size();
 	pexport->TimeDateStamp = 0xFFFFFFFF;
 	
-	i = 0;
-	for (it2 = proc_offsets.begin(); it2 != proc_offsets.end(); it2++, i++) {
-		unsigned int hint = exports[i].second;
-		pnames[i] = dir_rva + *it2;
-		pfuncs[hint] = dir_rva + tramp_offset + (TRAMPLONE_STUB_SIZE * i);
-		pords[i] = hint;
+	for (i = 0; i < exports.ords.size(); i++) {
+		pnames[i] = dir_rva + proc_offsets[i];
+		pords[i] = exports.ords[i];
+	}
+
+	for (i = 0; i < exports.func_count; i++) {
+		if (exports.func_map[i])
+			pfuncs[i] = dir_rva + tramp_offset + (TRAMPLONE_STUB_SIZE * i);
+		else
+			pfuncs[i] = 0;
 	}
 
 	*exp_size = tramp_offset;
@@ -373,8 +385,8 @@ bool unpack_resource(HMODULE hmod, DWORD res_id, string& file_name)
 	if (!buf)
 		return false;
 
-	hfile = CreateFileA(file_name.c_str(), GENERIC_WRITE, 0, NULL, CREATE_NEW, 0, NULL);
-	//hfile = CreateFileA(file_name.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+	//hfile = CreateFileA(file_name.c_str(), GENERIC_WRITE, 0, NULL, CREATE_NEW, 0, NULL);
+	hfile = CreateFileA(file_name.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
 	if (hfile == INVALID_HANDLE_VALUE) {
 		error = GetLastError();
 		cout << "Error, CreateFileA() failed with code: " << error << endl;
@@ -515,42 +527,38 @@ bool put_data_to_stub(string& file_name, DWORD payload_offset, string& payload, 
 
 int main(int argc, char* argv[])
 {
-	string target_bin, target_lib, original_lib, payload_lib;
-	string original_name, stub_path, ad;
-	procedure_container imports;
+	string original_lib, payload_lib, original_name;
 	DWORD export_offset, name_offset, payload_offset;
 	DWORD exp_dir_size;
 	string export_dir;
 	HMODULE pstub = 0;
 	bool result = false;
+	export_container_t exports;
 
-	if (argc < 4) {
+	if (argc < 3) {
 		printf("Error, invalid params!\n"\
-				"Usage: inject <target_exe_path> <target_dll_name> <original_dll_path> <payload_dll_path>\n");
+			"Usage: inject <original_dll_path> <payload_dll_path>\n");
 		goto epilog;
 	}
 
-	target_bin   = argv[1];
-	target_lib   = argv[2];
-	original_lib = argv[3];
-	payload_lib  = argv[4];
+	original_lib = argv[1];
+	payload_lib  = argv[2];
 
 	get_file_name(original_lib, original_name);
-	get_full_path(target_lib, stub_path);
 
-	// get import procedures list from target binary
-
-	if (!get_import_list(target_bin, target_lib, imports))
+	// get export directory info
+	
+	if (!get_export_table(original_lib, exports))
 		goto epilog;
 
 	// unpack stub from resources
 
-	if(!unpack_resource(GetModuleHandle(NULL), IDR_RCDATA1, stub_path))
+	if(!unpack_resource(GetModuleHandle(NULL), IDR_RCDATA1, original_name))
 		goto epilog;
 
 	// generate export directory
 
-	pstub = (HMODULE)map_file_section(stub_path, true);
+	pstub = (HMODULE)map_file_section(original_name, true);
 	if (!pstub)
 		goto epilog;
 
@@ -563,7 +571,7 @@ int main(int argc, char* argv[])
 	if (!get_stub_resource_offset(pstub, IDR_NAME2, RT_RCDATA, &payload_offset))
 		goto epilog;
 
-	if (!gen_export_dir(imports, target_lib, export_offset, export_dir, &exp_dir_size))
+	if (!gen_export_dir(exports, original_name, export_offset, export_dir, &exp_dir_size))
 		goto epilog;
 
 	unmap_file_section(pstub);
@@ -571,11 +579,11 @@ int main(int argc, char* argv[])
 
 	// put export directory to stub
 
-	if (!put_data_to_stub(stub_path, payload_offset, payload_lib, export_offset, export_dir, exp_dir_size, name_offset, original_name))
+	if (!put_data_to_stub(original_name, payload_offset, payload_lib, export_offset, export_dir, exp_dir_size, name_offset, original_lib))
 		goto epilog;
 
 	// profit!
-	cout << "Library '" << target_lib << "' successful generated" << endl;
+	cout << "Library '" << original_name << "' successful generated" << endl;
 	result = true;
 
 epilog:

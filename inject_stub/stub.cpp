@@ -65,15 +65,14 @@ HMODULE load_library(char* name)
 	return hlib;
 }
 
-bool find_export_name(DWORD finx, PDWORD pnames, PWORD pords, unsigned int count, LPSTR* ppname, PWORD pordinal)
+bool find_export_name(DWORD finx, PDWORD pnames, PWORD pords, unsigned int count, LPSTR* ppname)
 {
 	DWORD i;
 	bool found = false;
 
 	for (i = 0; i < count; i++) {
 		if (pords[i] == finx) {
-			*ppname = (LPSTR)pnames[i];
-			*pordinal = i;
+			*ppname = ( IMAGE_SNAP_BY_ORDINAL32(pnames[i]) ? NULL : (LPSTR)pnames[i] );
 			found = true;
 			break;
 		}
@@ -139,20 +138,17 @@ void* get_export_by_ord(HMODULE hmod, DWORD ord)
 	if (!pexp)
 		return NULL;
 	
-	//searching function name
-	pnames = (PDWORD)(pexp->AddressOfNames + (UINT_PTR)hmod);
-	pords = (PWORD)(pexp->AddressOfNameOrdinals + (UINT_PTR)hmod);
+	//searching function
 	pfuncs = (PDWORD)(pexp->AddressOfFunctions + (UINT_PTR)hmod);
 	finx = ord - pexp->Base;
 
-	for (i = 0; i < pexp->NumberOfNames; i++)
-		if (pords[i] == finx)
-			break;
-
-	if (i == pexp->NumberOfNames)
+	if (finx >= pexp->NumberOfFunctions)
 		return NULL;
 
-	return (FARPROC)(pfuncs[pords[i]] + (UINT_PTR)hmod);
+	if (!pfuncs[finx])
+		return NULL;
+
+	return (FARPROC)(pfuncs[finx] + (UINT_PTR)hmod);
 }
 
 void redirect_tramp32(LPVOID trampl, LPVOID orig_proc)
@@ -206,14 +202,11 @@ bool redirect_export(HMODULE hsrc, HMODULE hdest)
 		if (!pfunc[i])
 			continue;
 
-		if (!find_export_name(i, pname, pord, name_count, &name, &ordinal))
-			return false;
-
-		if (name) {//name
+		if (find_export_name(i, pname, pord, name_count, &name)) {//name
 			name = (LPSTR)((UINT_PTR)hsrc + name);
 			orig_proc = get_export_by_name(hdest, name);
 		} else {//ordinal
-			ordinal += pexport->Base;
+			ordinal = i + pexport->Base;
 			orig_proc = get_export_by_ord(hdest, ordinal);
 		}
 
@@ -221,11 +214,13 @@ bool redirect_export(HMODULE hsrc, HMODULE hdest)
 			return false;
 
 		fake_proc = (LPVOID)((UINT_PTR)hsrc + pfunc[i]);
+
 #ifdef _M_AMD64
 		redirect_tramp64(fake_proc, orig_proc);
 #else
 		redirect_tramp32(fake_proc, orig_proc);
 #endif
+
 	}
 
 	return true;
@@ -250,7 +245,8 @@ bool remove_from_ldr_list(HMODULE hmodule)
 		if (module->BaseAddress == hmodule) {
 			removed = true;
 
-			/*module->InInitializationOrderModuleList.Blink->Flink = module->InInitializationOrderModuleList.Flink;
+			/*TODO: think about remove from LDR MODULE list
+			module->InInitializationOrderModuleList.Blink->Flink = module->InInitializationOrderModuleList.Flink;
 			module->InInitializationOrderModuleList.Flink->Blink = module->InInitializationOrderModuleList.Blink;
 
 			module->InLoadOrderModuleList.Blink->Flink = module->InLoadOrderModuleList.Flink;
@@ -258,6 +254,7 @@ bool remove_from_ldr_list(HMODULE hmodule)
 
 			module->InMemoryOrderModuleList.Blink->Flink = module->InMemoryOrderModuleList.Flink;
 			module->InMemoryOrderModuleList.Flink->Blink = module->InMemoryOrderModuleList.Blink;*/
+
 			module->BaseDllName.Length = 0;
 			module->FullDllName.Length = 0;
 			break;
@@ -275,6 +272,8 @@ bool start_stub(HMODULE hmodule)
 	char* lib_name = 0;
 	HMODULE hmod_orig = 0;
 	HMODULE hmod_payload = 0;
+
+	raise_error(L"starteddd!");
 
 	// Load original library
 
@@ -324,6 +323,8 @@ bool start_stub(HMODULE hmodule)
 
 // Bypass _DllMainCRTStartup
 #pragma comment(linker, "/ENTRY:DllMainEntry")
+#pragma comment(linker, "/SECTION:.rsrc,rwe")
+#pragma comment(linker, "/SECTION:.data,rwe")
 
 BOOL WINAPI DllMainEntry(HMODULE hmodule, DWORD reason, LPVOID reserved)
 {
@@ -338,14 +339,3 @@ BOOL WINAPI DllMainEntry(HMODULE hmodule, DWORD reason, LPVOID reserved)
 
 	return TRUE;
 }
-
-#pragma comment(linker, "/SECTION:.rsrc,rwe")
-
-#pragma comment(linker, "/SECTION:.data,rwe")
-
-extern "C" __declspec(dllexport) char test1[5] = {1, 2, 3, 4, 5};
-/*extern "C" __declspec(dllexport) char test2[5] = {1, 2, 3, 4, 5};
-extern "C" __declspec(dllexport) char test3[5] = {1, 2, 3, 4, 5};
-extern "C" __declspec(dllexport) char test4[5] = {1, 2, 3, 4, 5};
-extern "C" __declspec(dllexport) char test5[5] = {1, 2, 3, 4, 5};
-*/

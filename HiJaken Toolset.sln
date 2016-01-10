@@ -4,9 +4,6 @@ Microsoft Visual Studio Solution File, Format Version 11.00
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "hijacken", "hijacken\hijacken.vcxproj", "{F3379EEA-1B31-4134-8C88-723C1B8AD341}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "inject", "inject\inject.vcxproj", "{251C45E8-FD09-4E4A-B134-C624D45B9806}"
-	ProjectSection(ProjectDependencies) = postProject
-		{E96590EB-599F-4A3E-9EE2-29B33C5EBA45} = {E96590EB-599F-4A3E-9EE2-29B33C5EBA45}
-	EndProjectSection
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "inject_stub", "inject_stub\inject_stub.vcxproj", "{E96590EB-599F-4A3E-9EE2-29B33C5EBA45}"
 EndProject

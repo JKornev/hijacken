@@ -1,8 +1,8 @@
 #include <Windows.h>
 
-extern "C" int abc = 0;
+#pragma comment(linker, "/ENTRY:DllMainEntry")
 
-BOOL WINAPI DllMain(HANDLE handle, DWORD reason, LPVOID reserved)
+BOOL WINAPI DllMainEntry(HMODULE hmodule, DWORD reason, LPVOID reserved)
 {
 	switch (reason) {
 	case DLL_PROCESS_ATTACH:
