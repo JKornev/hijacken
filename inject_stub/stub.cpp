@@ -273,8 +273,6 @@ bool start_stub(HMODULE hmodule)
 	HMODULE hmod_orig = 0;
 	HMODULE hmod_payload = 0;
 
-	raise_error(L"starteddd!");
-
 	// Load original library
 
  	lib_name = get_resource_ptr(hmodule, (ULONG_PTR)RT_RCDATA, IDR_NAME1, 1049, 0);
