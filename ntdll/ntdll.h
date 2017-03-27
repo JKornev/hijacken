@@ -55,7 +55,7 @@ typedef PVOID PLANGID;
 #endif /* NtCurrentThread */
 
 #ifdef _M_AMD64
-#define GetTEB() ((PTEB)__readgsdword(0x30))
+#define GetTEB() ((PTEB)__readgsqword(0x30))
 #else
 #define GetTEB() ((PTEB)__readfsdword(0x18))
 #endif
