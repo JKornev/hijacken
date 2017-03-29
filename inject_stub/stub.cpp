@@ -296,10 +296,12 @@ bool start_stub(HMODULE hmodule)
 			return false;
 		}
 
+#ifndef _M_AMD64
 		if (!remove_from_ldr_list(hmodule)) {
 			raise_error(L"Error, can't remove self from ldr module list");
 			return false;
 		}
+#endif
 	}
 
 	// Load payload
