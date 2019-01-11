@@ -1,0 +1,9 @@
+/*.sdf
+/*.suo
+/Debug
+/x64
+/hijacken/Debug
+/hijacken/x64
+/hijacken/*.user
+/Release
+/hijacken/Release
