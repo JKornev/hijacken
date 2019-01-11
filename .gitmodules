@@ -1,0 +1,3 @@
+[submodule "hijacken/ntlib"]
+	path = hijacken/ntlib
+	url = https://github.com/JKornev/NTlib
