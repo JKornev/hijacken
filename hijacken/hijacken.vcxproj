@@ -154,12 +154,12 @@
     <ClCompile Include="Commands.cpp" />
     <ClCompile Include="Hijacken.cpp" />
     <ClCompile Include="Utils.cpp" />
-    <ClCompile Include="WinAPI.cpp" />
+    <ClCompile Include="System.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Commands.h" />
     <ClInclude Include="Utils.h" />
-    <ClInclude Include="WinAPI.h" />
+    <ClInclude Include="System.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

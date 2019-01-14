@@ -52,4 +52,12 @@ namespace Utils
         bool GetNext(std::wstring& arg);
     };
 
+    // =================
+
+    class SeporatedStrings : public std::vector<std::wstring>
+    {
+    public:
+        SeporatedStrings(std::wstring& str, wchar_t seporator);
+    };
+
 };

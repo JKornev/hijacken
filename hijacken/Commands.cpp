@@ -1,5 +1,5 @@
 #include "Commands.h"
-#include "WinAPI.h"
+#include "System.h"
 #include <iostream>
 
 namespace Commands
@@ -8,7 +8,7 @@ namespace Commands
 
     ScanSystem::ScanSystem()
     {
-        WinAPI::Process self(::GetCurrentProcess());
+        System::Process self(::GetCurrentProcess());
         self.SetPrivilege(L"SeDebugPrivilege", true);
     }
 
@@ -22,21 +22,30 @@ namespace Commands
 
     void ScanSystem::Perform()
     {
-        WinAPI::ProcessesSnapshot snapshot;
+        System::ProcessesSnapshot snapshot;
         DWORD processId;
 
         while (snapshot.GetNextProcess(processId))
         {
-            enum { IdlePID = 0, SystemPID = 4};
+            enum { IdlePID = 0, SystemPID = 4 };
 
             if (processId == IdlePID || processId == SystemPID)
                 continue;
 
             try
             {
-                WinAPI::ProcessInformation info(processId);
-                WinAPI::ProcessEnvironment environment(info);
+                System::ProcessInformation info(processId);
+                System::ProcessEnvironmentBlock peb(info);
+                
+                std::wstring pathsStr;
+                auto env = peb.GetProcessEnvironment();
+                
+                if (!env->GetValue(L"Path", pathsStr) && !env->GetValue(L"PATH", pathsStr) && !env->GetValue(L"path", pathsStr))
+                    throw Utils::Exception(L"Can't obtain 'Path' environment variable");
 
+                Utils::SeporatedStrings paths(pathsStr, L';');
+                for (auto& dir : paths)
+                    std::wcout << L" " << dir.c_str() <<  std::endl;
 
             }
             catch (Utils::Exception& exception)
