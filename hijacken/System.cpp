@@ -1,6 +1,7 @@
 #include "System.h"
 #include <tlhelp32.h>
 #include <iostream>
+#include <aclapi.h>
 
 namespace System
 {
@@ -11,12 +12,8 @@ namespace System
     {
     }
 
-    Handle::Handle(HANDLE object) :
-        std::shared_ptr<void>(object, &ObjectDeleter)
-    {
-    }
-
-    Handle::~Handle()
+    Handle::Handle(HANDLE object, DestroyObjectRoutine destroyer) :
+        std::shared_ptr<void>(object, destroyer)
     {
     }
 
@@ -36,39 +33,41 @@ namespace System
     {
         return get();
     }
+    
+    void Handle::SetHandle(HANDLE object, DestroyObjectRoutine destroyer)
+    {
+        reset(object, destroyer);
+    }
 
 // =================
 
-    Process::Process(DWORD processId, DWORD access) : _processId(processId)
+    Process::Process(DWORD processId, DWORD access) : 
+        Handle(::OpenProcess(access, FALSE, processId)),
+        _processId(processId)
     {
-        auto process = ::OpenProcess(access, FALSE, _processId);
-        if (!process)
+        if (!Handle::IsValid())
             throw Utils::Exception(::GetLastError(), L"OpenProcess(pid:%d) failed with code %d", _processId, ::GetLastError());
-
-        _process = process;
     }
 
     Process::Process(HANDLE process)
     {
-        if (!::DuplicateHandle(::GetCurrentProcess(), process, ::GetCurrentProcess(), &process, 0, FALSE, DUPLICATE_SAME_ACCESS))
-            throw Utils::Exception(::GetLastError(), L"DuplicateHandle() failed with code %d", ::GetLastError());
-
         _processId = ::GetProcessId(process);
-        _process = process;
-    }
 
-    Process::~Process()
-    {
+        if (process == ::GetCurrentProcess())
+        {
+            Handle::SetHandle(process, &WithoutRelease);
+        }
+        else
+        {
+            if (!::DuplicateHandle(::GetCurrentProcess(), process, ::GetCurrentProcess(), &process, 0, FALSE, DUPLICATE_SAME_ACCESS))
+                throw Utils::Exception(::GetLastError(), L"DuplicateHandle() failed with code %d", ::GetLastError());
+            Handle::SetHandle(process);
+        }
     }
 
     DWORD Process::GetProcessID()
     {
         return _processId;
-    }
-
-    HANDLE Process::GetNativeHandle()
-    {
-        return _process.GetNativeHandle();
     }
 
     template<typename T>
@@ -79,7 +78,7 @@ namespace System
         buffer.resize(size / sizeof(buffer[0]));
 
         if (!::ReadProcessMemory(
-                _process.GetNativeHandle(), 
+                Handle::GetNativeHandle(), 
                 address,
                 const_cast<char*>(reinterpret_cast<const char*>(buffer.c_str())),
                 size,
@@ -92,15 +91,6 @@ namespace System
 
     void Process::ReadMemory(void* address, std::string& buffer, size_t size)
     {
-        /*SIZE_T readed;
-
-        buffer.resize(size);
-
-        if (!::ReadProcessMemory(_process.GetNativeHandle(), address, const_cast<char*>(buffer.c_str()), size, &readed))
-            throw Utils::Exception(GetLastError(), L"ReadProcessMemory(pid:%d) failed with code %d", _processId, GetLastError());
-
-        if (readed != size)
-            throw Utils::Exception(L"ReadProcessMemory(pid:%d) can't read full chunk", _processId);*/
         ReadMemoryToContainer<std::string>(address, buffer, size);
     }
 
@@ -113,14 +103,14 @@ namespace System
     {
         SIZE_T written = 0;
 
-        auto result = ::WriteProcessMemory(_process.GetNativeHandle(), address, const_cast<char*>(buffer.c_str()), buffer.size(), &written);
+        auto result = ::WriteProcessMemory(Handle::GetNativeHandle(), address, const_cast<char*>(buffer.c_str()), buffer.size(), &written);
         if (!result && unprotect)
         {
             DWORD old;
-            if (::VirtualProtectEx(_process.GetNativeHandle(), address, buffer.size(), PAGE_EXECUTE_READWRITE, &old))
+            if (::VirtualProtectEx(Handle::GetNativeHandle(), address, buffer.size(), PAGE_EXECUTE_READWRITE, &old))
             {
-                result = ::WriteProcessMemory(_process.GetNativeHandle(), address, const_cast<char*>(buffer.c_str()), buffer.size(), &written);
-                ::VirtualProtectEx(_process.GetNativeHandle(), address, buffer.size(), old, &old);
+                result = ::WriteProcessMemory(Handle::GetNativeHandle(), address, const_cast<char*>(buffer.c_str()), buffer.size(), &written);
+                ::VirtualProtectEx(Handle::GetNativeHandle(), address, buffer.size(), old, &old);
                 if (!result)
                     throw Utils::Exception(::GetLastError(), L"WriteProcessMemory(pid:%d) failed with code %d", _processId, ::GetLastError());
             }
@@ -140,7 +130,7 @@ namespace System
         TOKEN_PRIVILEGES priveleges = {};
         LUID luid = {};
 
-        if (!::OpenProcessToken(_process.GetNativeHandle(), TOKEN_ADJUST_PRIVILEGES, &object))
+        if (!::OpenProcessToken(Handle::GetNativeHandle(), TOKEN_ADJUST_PRIVILEGES, &object))
             throw Utils::Exception(::GetLastError(), L"OpenProcessToken(pid:%d) failed with code %d", _processId, ::GetLastError());
 
         Handle token(object);
@@ -156,19 +146,19 @@ namespace System
             throw Utils::Exception(::GetLastError(), L"AdjustTokenPrivileges(pid:%d) failed with code %d", _processId, ::GetLastError());
     }
 
+    void Process::WithoutRelease(HANDLE object)
+    {
+    }
+
 // =================
 
-    ProcessesSnapshot::ProcessesSnapshot()
+    ProcessesSnapshot::ProcessesSnapshot() :
+        Handle(::CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0))
     {
-        _snapshot = ::CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if (!_snapshot.IsValid())
+        if (!Handle::IsValid())
             throw Utils::Exception(::GetLastError(), L"CreateToolhelp32Snapshot() failed with code %d", ::GetLastError());
 
         _fromStart = true;
-    }
-
-    ProcessesSnapshot::~ProcessesSnapshot()
-    {
     }
 
     bool ProcessesSnapshot::GetNextProcess(DWORD& processId)
@@ -178,14 +168,14 @@ namespace System
 
         if (_fromStart)
         {
-            if (!::Process32FirstW(_snapshot.GetNativeHandle(), &entry))
+            if (!::Process32FirstW(Handle::GetNativeHandle(), &entry))
                 return false;
 
             _fromStart = false;
         }
         else
         {
-            if (!::Process32NextW(_snapshot.GetNativeHandle(), &entry))
+            if (!::Process32NextW(Handle::GetNativeHandle(), &entry))
                 return false;
         }
 
@@ -208,10 +198,6 @@ namespace System
                 PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_READ
             )
         );
-    }
-
-    ProcessInformation::~ProcessInformation()
-    {
     }
 
     ProcessPtr ProcessInformation::GetProcess()
@@ -262,10 +248,6 @@ namespace System
         _process = processInfo.GetProcess();
     }
 
-    ProcessEnvironmentBlock::~ProcessEnvironmentBlock()
-    {
-    }
-
     ProcessEnvironmentPtr ProcessEnvironmentBlock::GetProcessEnvironment()
     {
         LoadProcessParameters();
@@ -274,6 +256,16 @@ namespace System
             _process->ReadMemory(_params->Environment, _paramsEnv, _params->EnvironmentSize);
 
         return ProcessEnvironmentPtr(new ProcessEnvironment(_paramsEnv));
+    }
+
+    void ProcessEnvironmentBlock::GetCurrentDir(std::wstring& directory)
+    {
+        LoadProcessParameters();
+
+        if (!_currentDirectory.size())
+            _process->ReadMemory(_params->CurrentDirectory.DosPath.Buffer, _currentDirectory, _params->CurrentDirectory.DosPath.Length);
+
+        directory = _currentDirectory;
     }
 
     void ProcessEnvironmentBlock::LoadProcessParameters()
@@ -286,6 +278,7 @@ namespace System
             const_cast<char*>(_paramsBuffer.c_str())
         );
     }
+
 
 // =================
 
@@ -307,10 +300,6 @@ namespace System
         }
     }
 
-    ProcessEnvironment::~ProcessEnvironment()
-    {
-    }
-
     bool ProcessEnvironment::GetValue(const wchar_t* key, std::wstring& output)
     {
         auto value = _variables.find(std::wstring(key));
@@ -321,4 +310,118 @@ namespace System
         output = value->second;
         return true;
     }
+
+// =================
+
+    PrimaryToken::PrimaryToken(Process& source, DWORD access)
+    {
+        HANDLE object = nullptr;
+
+        if (!::OpenProcessToken(source.GetNativeHandle(), access, &object))
+            throw Utils::Exception(::GetLastError(), L"OpenProcessToken(pid:%d) failed with code %d", source.GetProcessID(), ::GetLastError());
+
+        Handle::SetHandle(object);
+    }
+
+// =================
+
+    ImpersonateToken::ImpersonateToken(Process& source, DWORD access)
+    {
+        HANDLE object = nullptr;
+        Handle primary;
+
+        access |= TOKEN_DUPLICATE;
+
+        if (!::OpenProcessToken(source.GetNativeHandle(), access, &object))
+            throw Utils::Exception(::GetLastError(), L"OpenProcessToken(pid:%d) failed with code %d", source.GetProcessID(), ::GetLastError());
+
+        primary = object;
+
+        if (!::DuplicateToken(object, SecurityImpersonation, &object))
+            throw Utils::Exception(::GetLastError(), L"DuplicateToken(pid:%d) failed with code %d", source.GetProcessID(), ::GetLastError());
+
+        Handle::SetHandle(object);
+    }
+
+// =================
+
+    SecurityDescriptor::SecurityDescriptor(Handle& file) : 
+        _descriptor(nullptr), 
+        _dacl(nullptr)
+    {
+        auto result = ::GetSecurityInfo(
+            file.GetNativeHandle(),
+            SE_FILE_OBJECT, 
+            DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION,
+            &_owner,
+            &_group, 
+            &_dacl,
+            NULL, 
+            &_descriptor
+        );
+        if (result != ERROR_SUCCESS)
+            throw Utils::Exception(::GetLastError(), L"GetSecurityInfo() failed with code %d", ::GetLastError());
+    }
+
+    SecurityDescriptor::~SecurityDescriptor()
+    {
+        ::LocalFree(_descriptor);
+    }
+
+    PSECURITY_DESCRIPTOR SecurityDescriptor::GetNativeSecurityDescriptor()
+    {
+        return _descriptor;
+    }
+
+// =================
+
+    TokenAccessChecker::TokenAccessChecker(Process& process) :
+        _token(process, TOKEN_DUPLICATE | TOKEN_QUERY)
+    {
+    }
+
+    TokenAccessChecker::TokenAccessChecker(ImpersonateToken& token) :
+        _token(token)
+    {
+    }
+
+    bool TokenAccessChecker::IsAccessible(SecurityDescriptor& descriptor, DWORD desiredAccess)
+    {
+        BOOL accessStatus = FALSE;
+        GENERIC_MAPPING mapping = {};
+        PRIVILEGE_SET PrivilegeSet;
+        DWORD dwPrivSetSize = sizeof(PRIVILEGE_SET);
+        DWORD dwAccessAllowed = 0;
+
+        desiredAccess = FILE_WRITE_ACCESS;
+
+        mapping.GenericRead = FILE_READ_ACCESS;
+        mapping.GenericWrite = FILE_WRITE_ACCESS;
+        mapping.GenericExecute = 0;
+        mapping.GenericAll = FILE_READ_ACCESS | FILE_WRITE_ACCESS;
+
+        MapGenericMask(&desiredAccess, &mapping);
+
+        if (!IsValidSecurityDescriptor(descriptor.GetNativeSecurityDescriptor()))
+            std::wcout << L"invalid" << std::endl;
+
+        if (!AccessCheck(descriptor.GetNativeSecurityDescriptor(), _token.GetNativeHandle(), desiredAccess, &mapping, &PrivilegeSet, &dwPrivSetSize, &dwAccessAllowed, &accessStatus))
+        {
+            
+            auto error = ::GetLastError();
+            throw Utils::Exception(::GetLastError(), L"AccessCheck() failed with code %d", ::GetLastError());
+        }
+
+        return (accessStatus != FALSE);
+    }
+
+// =================
+
+    Directory::Directory(const wchar_t* path, DWORD access, DWORD share) :
+        Handle(::CreateFileW(path, access, share, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL))
+    {
+        if (!Handle::IsValid())
+            throw Utils::Exception(::GetLastError(), L"CreateFileW() failed with code %d", ::GetLastError());
+    }
+
 };

@@ -22,6 +22,7 @@ namespace Commands
     class ScanSystem : public ICommand
     {
     private:
+        DWORD _tokenSourceId;
 
     public:
         ScanSystem();

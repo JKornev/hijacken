@@ -54,10 +54,10 @@ namespace Utils
 
     // =================
 
-    class SeporatedStrings : public std::vector<std::wstring>
+    class SeparatedStrings : public std::vector<std::wstring>
     {
     public:
-        SeporatedStrings(std::wstring& str, wchar_t seporator);
+        SeparatedStrings(std::wstring& str, wchar_t seporator);
     };
 
 };

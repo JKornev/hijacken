@@ -85,14 +85,15 @@ namespace Utils
 
 // =================
 
-    SeporatedStrings::SeporatedStrings(std::wstring& str, wchar_t seporator)
+    SeparatedStrings::SeparatedStrings(std::wstring& str, wchar_t seporator)
     {
         size_t startOffset = 0;
         auto endOffset = str.find(seporator);
 
         while (endOffset != std::wstring::npos)
         {
-            push_back(std::wstring(&str[startOffset], &str[endOffset]));
+            if (startOffset != endOffset)
+                push_back(std::wstring(&str[startOffset], &str[endOffset]));
             startOffset = endOffset + 1;
             endOffset = str.find(seporator, startOffset);
         }

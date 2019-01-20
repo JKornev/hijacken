@@ -8,6 +8,12 @@
 namespace
 {
 
+    void SwitchConsoleToUTF16Mode()
+    {
+        _setmode(_fileno(stdout), _O_U16TEXT);
+        _setmode(_fileno(stderr), _O_U16TEXT);
+    }
+
     bool PrintUsageIfNeeded(Utils::Arguments& args)
     {
         std::wstring command;
@@ -42,9 +48,16 @@ namespace
     }
 };
 
+void testLoadLib()
+{
+
+}
+
 int wmain(int argc, wchar_t* argv[])
 {
-    _setmode(_fileno(stdout), _O_U16TEXT);
+    testLoadLib();
+
+    SwitchConsoleToUTF16Mode();
 
     try
     {
