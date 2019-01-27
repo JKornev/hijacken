@@ -2,6 +2,8 @@
 #include <tlhelp32.h>
 #include <iostream>
 #include <aclapi.h>
+#include <psapi.h>
+#include <sddl.h>
 
 namespace System
 {
@@ -10,12 +12,12 @@ namespace System
     Handle::Handle() :
         std::shared_ptr<void>(0, &ObjectDeleter)
     {
-    }
+        }
 
     Handle::Handle(HANDLE object, DestroyObjectRoutine destroyer) :
         std::shared_ptr<void>(object, destroyer)
     {
-    }
+        }
 
     void Handle::ObjectDeleter(HANDLE object)
     {
@@ -33,7 +35,7 @@ namespace System
     {
         return get();
     }
-    
+
     void Handle::SetHandle(HANDLE object, DestroyObjectRoutine destroyer)
     {
         reset(object, destroyer);
@@ -41,7 +43,7 @@ namespace System
 
 // =================
 
-    Process::Process(DWORD processId, DWORD access) : 
+    Process::Process(DWORD processId, DWORD access) :
         Handle(::OpenProcess(access, FALSE, processId)),
         _processId(processId)
     {
@@ -78,11 +80,11 @@ namespace System
         buffer.resize(size / sizeof(buffer[0]));
 
         if (!::ReadProcessMemory(
-                Handle::GetNativeHandle(), 
-                address,
-                const_cast<char*>(reinterpret_cast<const char*>(buffer.c_str())),
-                size,
-                &readed))
+            Handle::GetNativeHandle(),
+            address,
+            const_cast<char*>(reinterpret_cast<const char*>(buffer.c_str())),
+            size,
+            &readed))
             throw Utils::Exception(GetLastError(), L"ReadProcessMemory(pid:%d) failed with code %d", _processId, GetLastError());
 
         if (readed != size)
@@ -124,28 +126,6 @@ namespace System
             throw Utils::Exception(L"Error, WriteProcessMemory() can't write full chunk");
     }
 
-    void Process::SetPrivilege(wchar_t* Privelege, bool Enable)
-    {
-        HANDLE object = NULL;
-        TOKEN_PRIVILEGES priveleges = {};
-        LUID luid = {};
-
-        if (!::OpenProcessToken(Handle::GetNativeHandle(), TOKEN_ADJUST_PRIVILEGES, &object))
-            throw Utils::Exception(::GetLastError(), L"OpenProcessToken(pid:%d) failed with code %d", _processId, ::GetLastError());
-
-        Handle token(object);
-
-        if (!::LookupPrivilegeValueW(NULL, Privelege, &luid))
-            throw Utils::Exception(::GetLastError(), L"LookupPrivilegeValue(pid:%d) failed with code %d", _processId, ::GetLastError());
-
-        priveleges.PrivilegeCount = 1;
-        priveleges.Privileges[0].Luid = luid;
-        priveleges.Privileges[0].Attributes = (Enable ? SE_PRIVILEGE_ENABLED : 0);
-
-        if (!::AdjustTokenPrivileges(token.GetNativeHandle(), FALSE, &priveleges, sizeof(priveleges), NULL, NULL))
-            throw Utils::Exception(::GetLastError(), L"AdjustTokenPrivileges(pid:%d) failed with code %d", _processId, ::GetLastError());
-    }
-
     void Process::WithoutRelease(HANDLE object)
     {
     }
@@ -156,12 +136,18 @@ namespace System
         Handle(::CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0))
     {
         if (!Handle::IsValid())
-            throw Utils::Exception(::GetLastError(), L"CreateToolhelp32Snapshot() failed with code %d", ::GetLastError());
+            throw Utils::Exception(::GetLastError(), L"CreateToolhelp32Snapshot(processes) failed with code %d", ::GetLastError());
 
-        _fromStart = true;
+        ResetWalking();
     }
 
     bool ProcessesSnapshot::GetNextProcess(DWORD& processId)
+    {
+        std::wstring name;
+        return GetNextProcess(processId, name);
+    }
+
+    bool ProcessesSnapshot::GetNextProcess(DWORD& processId, std::wstring& name)
     {
         PROCESSENTRY32W entry = {};
         entry.dwSize = sizeof(entry);
@@ -179,6 +165,7 @@ namespace System
                 return false;
         }
 
+        name = entry.szExeFile;
         processId = entry.th32ProcessID;
         return true;
     }
@@ -190,12 +177,73 @@ namespace System
 
 // =================
 
+    ModulesSnapshot::ModulesSnapshot(DWORD processId) :
+        Handle(::CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, processId))
+    {
+        if (!Handle::IsValid())
+            throw Utils::Exception(::GetLastError(), L"CreateToolhelp32Snapshot(modules) failed with code %d", ::GetLastError());
+
+        ResetWalking();
+    }
+
+    bool ModulesSnapshot::GetNextModule(HMODULE& module)
+    {
+        MODULEENTRY32W entry = {};
+        entry.dwSize = sizeof(entry);
+
+        if (_fromStart)
+        {
+            if (!::Module32FirstW(Handle::GetNativeHandle(), &entry))
+                return false;
+
+            _fromStart = false;
+        }
+        else
+        {
+            if (!::Module32NextW(Handle::GetNativeHandle(), &entry))
+                return false;
+        }
+
+        module = entry.hModule;
+        return true;
+    }
+
+    bool ModulesSnapshot::GetNextModule(HMODULE& module, std::wstring& name)
+    {
+        MODULEENTRY32W entry = {};
+        entry.dwSize = sizeof(entry);
+
+        if (_fromStart)
+        {
+            if (!::Module32FirstW(Handle::GetNativeHandle(), &entry))
+                return false;
+
+            _fromStart = false;
+        }
+        else
+        {
+            if (!::Module32NextW(Handle::GetNativeHandle(), &entry))
+                return false;
+        }
+
+        name = entry.szModule;
+        module = entry.hModule;
+        return true;
+    }
+
+    void ModulesSnapshot::ResetWalking()
+    {
+        _fromStart = true;
+    }
+
+// =================
+
     ProcessInformation::ProcessInformation(DWORD processId) : _pebAddress(nullptr)
     {
         _process.reset(
             new Process(
-                processId,
-                PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_READ
+            processId,
+            PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_READ
             )
         );
     }
@@ -209,7 +257,7 @@ namespace System
     {
         PROCESS_BASIC_INFORMATION basic;
         DWORD written;
-        
+
         if (!_pebAddress)
         {
 
@@ -219,8 +267,6 @@ namespace System
 
             _pebAddress = reinterpret_cast<PPEB>(basic.PebBaseAddress);
         }
-        //std::wcout << L" ProcessPEB (" << std::dec << _process->GetProcessID() << L"): ";
-        //std::wcout << std::hex << basic.PebBaseAddress << std::endl;
 
         return _pebAddress;
     }
@@ -231,6 +277,57 @@ namespace System
             _peb.reset(new ProcessEnvironmentBlock(*this));
 
         return _peb;
+    }
+
+    void ProcessInformation::GetImagePath(std::wstring& path)
+    {
+        DWORD written;
+        PUNICODE_STRING imagePath;
+        std::string buffer;
+
+        buffer.resize(MAX_PATH * 2);
+
+        auto status = ::NtQueryInformationProcess(
+            _process->GetNativeHandle(),
+            ProcessImageFileNameWin32,
+            const_cast<char*>(buffer.c_str()),
+            static_cast<ULONG>(buffer.size()),
+            &written
+        );
+        if (!NT_SUCCESS(status))
+            throw Utils::Exception(status, L"NtQueryInformationProcess(pid:%d) failed with code %08X", _process->GetProcessID(), status);
+
+        if (buffer.size() < sizeof(UNICODE_STRING))
+            throw Utils::Exception(L"Buffer received from pid:%d is crowed", _process->GetProcessID());
+
+        imagePath = reinterpret_cast<PUNICODE_STRING>(const_cast<char*>(buffer.c_str()));
+
+        if (buffer.size() < sizeof(UNICODE_STRING)+imagePath->Length)
+            throw Utils::Exception(L"String received from pid:%d is crowed", _process->GetProcessID());
+
+        auto chars = imagePath->Length / sizeof(wchar_t);
+        auto begin = reinterpret_cast<wchar_t*>(imagePath->Buffer);
+        auto end = reinterpret_cast<wchar_t*>(imagePath->Buffer + chars);
+
+        path.insert(path.begin(), begin, end);
+    }
+
+    void ProcessInformation::GetImageDirectory(std::wstring& directory)
+    {
+        std::wstring path;
+        GetImagePath(path);
+        Utils::ExtractFileDirectory(path, directory);
+    }
+
+    void ProcessInformation::GetModulePath(HMODULE module, std::wstring& path)
+    {
+        wchar_t buffer[MAX_PATH * 2];
+
+        auto result = ::GetModuleFileNameExW(_process->GetNativeHandle(), module, buffer, _countof(buffer));
+        if (!result)
+            throw Utils::Exception(L"GetModuleFileNameExW(pid:%d) failed with code %d", _process->GetProcessID(), ::GetLastError());
+
+        path = buffer;
     }
 
 // =================
@@ -313,12 +410,156 @@ namespace System
 
 // =================
 
-    PrimaryToken::PrimaryToken(Process& source, DWORD access)
+    void TokenBase::SetPrivilege(wchar_t* privelege, bool enable)
+    {
+        TOKEN_PRIVILEGES priveleges = {};
+        LUID luid = {};
+
+        if (!::LookupPrivilegeValueW(NULL, privelege, &luid))
+            throw Utils::Exception(::GetLastError(), L"LookupPrivilegeValue() failed with code %d", ::GetLastError());
+
+        priveleges.PrivilegeCount = 1;
+        priveleges.Privileges[0].Luid = luid;
+        priveleges.Privileges[0].Attributes = (enable ? SE_PRIVILEGE_ENABLED : 0);
+
+        if (!::AdjustTokenPrivileges(Handle::GetNativeHandle(), FALSE, &priveleges, sizeof(priveleges), NULL, NULL))
+            throw Utils::Exception(::GetLastError(), L"AdjustTokenPrivileges() failed with code %d", ::GetLastError());
+    }
+
+    TokenIntegrityLvl TokenBase::GetIntegrityLevel()
+    {
+        std::string buffer;
+        DWORD written = 0;
+
+        buffer.resize(64);
+
+        auto result = ::GetTokenInformation(
+            Handle::GetNativeHandle(),
+            TokenIntegrityLevel, 
+            const_cast<char*>(buffer.c_str()), 
+            static_cast<DWORD>(buffer.size()), 
+            &written
+        );
+
+        if (!result && ::GetLastError() == ERROR_INSUFFICIENT_BUFFER)
+        {
+            buffer.resize(written);
+            result = ::GetTokenInformation(
+                Handle::GetNativeHandle(),
+                TokenIntegrityLevel, 
+                const_cast<char*>(buffer.c_str()), 
+                static_cast<DWORD>(buffer.size()), 
+                &written
+            );
+        }
+
+        if (!result)
+            throw Utils::Exception(::GetLastError(), L"GetTokenInformation() failed with code %d", ::GetLastError());
+
+        auto mandatory = reinterpret_cast<PTOKEN_MANDATORY_LABEL>(
+            const_cast<char*>(buffer.c_str())
+        );
+
+        if (!::IsValidSid(mandatory->Label.Sid))
+            throw Utils::Exception(L"A seed you received isn't valid");
+
+        TokenIntegrityLvl level;
+        auto sub = *::GetSidSubAuthority(mandatory->Label.Sid, 0);
+
+        switch (sub)
+        {
+        case SECURITY_MANDATORY_UNTRUSTED_RID:
+            level = TokenIntegrityLvl::Untrusted;
+            break;
+        case SECURITY_MANDATORY_LOW_RID:
+            level = TokenIntegrityLvl::Low;
+            break;
+        case SECURITY_MANDATORY_MEDIUM_RID:
+            level = TokenIntegrityLvl::Medium;
+            break;
+        case SECURITY_MANDATORY_MEDIUM_PLUS_RID:
+            level = TokenIntegrityLvl::MediumPlus;
+            break;
+        case SECURITY_MANDATORY_HIGH_RID:
+            level = TokenIntegrityLvl::High;
+            break;
+        case SECURITY_MANDATORY_SYSTEM_RID:
+            level = TokenIntegrityLvl::System;
+            break;
+        default:
+            throw Utils::Exception(L"Unknown mandatory authority %x", sub);
+        }
+
+        return level;
+    }
+
+    void TokenBase::SetIntegrityLevel(TokenIntegrityLvl level)
+    {
+        auto sid = AllocateSidByIntegrityLevel(level);
+
+        TOKEN_MANDATORY_LABEL label = {};
+        label.Label.Attributes = SE_GROUP_INTEGRITY;
+        label.Label.Sid = sid;
+
+        auto result = ::SetTokenInformation(Handle::GetNativeHandle(), TokenIntegrityLevel, &label, sizeof(label) + ::GetLengthSid(sid));
+        auto error = ::GetLastError();
+        
+        ::LocalFree(sid);
+        
+        if (!result)
+            throw Utils::Exception(error, L"SetTokenInformation(IntegrityLevel) failed with code %d", error);
+    }
+
+    PSID TokenBase::AllocateSidByIntegrityLevel(TokenIntegrityLvl level)
+    {
+        std::wstring sidName;
+
+        switch (level)
+        {
+        case TokenIntegrityLvl::Untrusted:
+            sidName = L"S-1-16-0";
+            break;
+        case TokenIntegrityLvl::Low:
+            sidName = L"S-1-16-4096";
+            break;
+        case TokenIntegrityLvl::Medium:
+            sidName = L"S-1-16-8192";
+            break;
+        case TokenIntegrityLvl::MediumPlus:
+            sidName = L"S-1-16-8448";
+            break;
+        case TokenIntegrityLvl::High:
+            sidName = L"S-1-16-12288";
+            break;
+        case TokenIntegrityLvl::System:
+            sidName = L"S-1-16-16384";
+            break;
+        default:
+            throw Utils::Exception(L"Unknown integrity level %d", level);
+            break;
+        };
+
+        PSID sid = NULL;
+        if (!::ConvertStringSidToSidW(sidName.c_str(), &sid))
+            throw Utils::Exception(::GetLastError(), L"ConvertStringSidToSid() failed with code %d", ::GetLastError());
+
+        return sid;
+    }
+
+// =================
+
+    PrimaryToken::PrimaryToken(Process& source, DWORD access, bool duplicate)
     {
         HANDLE object = nullptr;
 
         if (!::OpenProcessToken(source.GetNativeHandle(), access, &object))
             throw Utils::Exception(::GetLastError(), L"OpenProcessToken(pid:%d) failed with code %d", source.GetProcessID(), ::GetLastError());
+
+        if (duplicate)
+        {
+            if (!::DuplicateTokenEx(object, 0, NULL, SecurityImpersonation, TokenPrimary, &object))
+                throw Utils::Exception(::GetLastError(), L"DuplicateToken(pid:%d) failed with code %d", source.GetProcessID(), ::GetLastError());
+        }
 
         Handle::SetHandle(object);
     }
@@ -328,16 +569,13 @@ namespace System
     ImpersonateToken::ImpersonateToken(Process& source, DWORD access)
     {
         HANDLE object = nullptr;
-        Handle primary;
 
         access |= TOKEN_DUPLICATE;
 
         if (!::OpenProcessToken(source.GetNativeHandle(), access, &object))
             throw Utils::Exception(::GetLastError(), L"OpenProcessToken(pid:%d) failed with code %d", source.GetProcessID(), ::GetLastError());
 
-        primary = object;
-
-        if (!::DuplicateToken(object, SecurityImpersonation, &object))
+        if (!::DuplicateTokenEx(object, 0, NULL, SecurityImpersonation, TokenImpersonation, &object))
             throw Utils::Exception(::GetLastError(), L"DuplicateToken(pid:%d) failed with code %d", source.GetProcessID(), ::GetLastError());
 
         Handle::SetHandle(object);
@@ -393,12 +631,10 @@ namespace System
         DWORD dwPrivSetSize = sizeof(PRIVILEGE_SET);
         DWORD dwAccessAllowed = 0;
 
-        desiredAccess = FILE_WRITE_ACCESS;
-
-        mapping.GenericRead = FILE_READ_ACCESS;
-        mapping.GenericWrite = FILE_WRITE_ACCESS;
-        mapping.GenericExecute = 0;
-        mapping.GenericAll = FILE_READ_ACCESS | FILE_WRITE_ACCESS;
+        //TODO: common logic
+        mapping.GenericRead  = FILE_GENERIC_READ;
+        mapping.GenericWrite = FILE_GENERIC_WRITE;
+        mapping.GenericAll   = FILE_GENERIC_READ | FILE_GENERIC_WRITE;
 
         MapGenericMask(&desiredAccess, &mapping);
 
@@ -406,13 +642,18 @@ namespace System
             std::wcout << L"invalid" << std::endl;
 
         if (!AccessCheck(descriptor.GetNativeSecurityDescriptor(), _token.GetNativeHandle(), desiredAccess, &mapping, &PrivilegeSet, &dwPrivSetSize, &dwAccessAllowed, &accessStatus))
-        {
-            
-            auto error = ::GetLastError();
             throw Utils::Exception(::GetLastError(), L"AccessCheck() failed with code %d", ::GetLastError());
-        }
 
         return (accessStatus != FALSE);
+    }
+
+// =================
+
+    File::File(const wchar_t* path, DWORD access, DWORD share) :
+        Handle(::CreateFileW(path, access, share, NULL, OPEN_EXISTING, 0, NULL))
+    {
+        if (!Handle::IsValid())
+            throw Utils::Exception(::GetLastError(), L"CreateFileW(file) failed with code %d", ::GetLastError());
     }
 
 // =================
@@ -421,7 +662,7 @@ namespace System
         Handle(::CreateFileW(path, access, share, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL))
     {
         if (!Handle::IsValid())
-            throw Utils::Exception(::GetLastError(), L"CreateFileW() failed with code %d", ::GetLastError());
+            throw Utils::Exception(::GetLastError(), L"CreateFileW(dir) failed with code %d", ::GetLastError());
     }
 
 };

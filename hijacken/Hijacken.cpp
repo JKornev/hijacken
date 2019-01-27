@@ -7,7 +7,6 @@
 
 namespace
 {
-
     void SwitchConsoleToUTF16Mode()
     {
         _setmode(_fileno(stdout), _O_U16TEXT);
@@ -35,28 +34,49 @@ namespace
         if (!args.GetNext(command))
             throw Utils::Explanation(L"Error, invalid usage. Please use 'hijacken /?'");
 
-        if (command == L"/scansys")
-            ptr = Commands::CommandPtr(new Commands::ScanSystem());
-        else if (command == L"/scanfile")
-            ptr = Commands::CommandPtr(new Commands::ScanFile());
+        if (command == L"/scan")
+        {
+            if (!args.GetNext(sub))
+                throw Utils::Explanation(L"Error, /scan argument isn't presented");
+
+            if (sub == L"file")
+                ptr = Commands::CommandPtr(new Commands::ScanFile());
+            else if (sub == L"directory")
+                ptr = Commands::CommandPtr(new Commands::ScanDirectory());
+            else if (sub == L"process")
+                ptr = Commands::CommandPtr(new Commands::ScanProcess());
+            else if (sub == L"processes")
+                ptr = Commands::CommandPtr(new Commands::ScanProcesses());
+            else if (sub == L"autorun")
+                ptr = Commands::CommandPtr(new Commands::ScanAutorun());
+            else if (sub == L"task")
+                ptr = Commands::CommandPtr(new Commands::ScanTask());
+            else if (sub == L"tasks")
+                ptr = Commands::CommandPtr(new Commands::ScanTasks());
+            else if (sub == L"service")
+                ptr = Commands::CommandPtr(new Commands::ScanService());
+            else if (sub == L"services")
+                ptr = Commands::CommandPtr(new Commands::ScanServices());
+            else if (sub == L"system")
+                ptr = Commands::CommandPtr(new Commands::ScanSystem());
+            else
+                throw Utils::Explanation(L"Error, invalid /scan argument");
+        }
         else if (command == L"/makedll")
+        {
             ptr = Commands::CommandPtr(new Commands::MakeDll());
+        }
         else
+        {
             throw Utils::Explanation(L"Error, invalid command. Please use 'hijacken /?'");
+        }
 
         return ptr;
     }
 };
 
-void testLoadLib()
-{
-
-}
-
 int wmain(int argc, wchar_t* argv[])
 {
-    testLoadLib();
-
     SwitchConsoleToUTF16Mode();
 
     try

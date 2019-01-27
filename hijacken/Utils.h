@@ -60,4 +60,6 @@ namespace Utils
         SeparatedStrings(std::wstring& str, wchar_t seporator);
     };
 
+    void ExtractFileDirectory(std::wstring& path, std::wstring& directory);
+
 };

@@ -51,9 +51,6 @@ namespace System
         void ReadMemory(void* address, std::wstring& buffer, size_t size);
         void WriteMemory(void* address, std::string& buffer, bool unprotect = true);
         void WriteMemory(void* address, std::wstring& buffer, bool unprotect = true);
-
-        void SetPrivilege(wchar_t* privelege, bool enable);
-
     };
 
     typedef std::shared_ptr<Process> ProcessPtr;
@@ -63,13 +60,28 @@ namespace System
     class ProcessesSnapshot : protected Handle
     {
     private:
-        bool   _fromStart;
+        bool _fromStart;
 
     public:
         ProcessesSnapshot();
 
         bool GetNextProcess(DWORD& processId);
+        bool GetNextProcess(DWORD& processId, std::wstring& name);
+        void ResetWalking();
+    };
 
+// =================
+
+    class ModulesSnapshot : protected Handle
+    {
+    private:
+        bool _fromStart;
+
+    public:
+        ModulesSnapshot(DWORD processId);
+
+        bool GetNextModule(HMODULE& module);
+        bool GetNextModule(HMODULE& module, std::wstring& name);
         void ResetWalking();
     };
 
@@ -100,6 +112,10 @@ namespace System
         PPEB GetPEBAddress();
         ProcessEnvironmentBlockPtr GetProcessEnvironmentBlock();
 
+        void GetImagePath(std::wstring& path);
+        void GetImageDirectory(std::wstring& directory);
+
+        void GetModulePath(HMODULE module, std::wstring& path);
     };
 
 // =================
@@ -143,17 +159,49 @@ namespace System
 
 // =================
 
-    class PrimaryToken : public Handle
+    enum TokenIntegrityLvl
     {
-    public:
-        PrimaryToken(Process& source, DWORD access = TOKEN_ALL_ACCESS);
+        Untrusted,
+        //BelowLow, ???
+        Low,
+        //MediumLow, ???
+        Medium,
+        MediumPlus,
+        High,
+        System,
+        //Protected ???
     };
 
-    class ImpersonateToken : public Handle
+    class TokenBase : public Handle
+    {
+    protected:
+        TokenBase() {}
+
+    public:
+        void SetPrivilege(wchar_t* privelege, bool enable);
+
+        TokenIntegrityLvl GetIntegrityLevel();
+        void SetIntegrityLevel(TokenIntegrityLvl level);
+
+    private:
+        PSID AllocateSidByIntegrityLevel(TokenIntegrityLvl level);
+    };
+
+    class PrimaryToken : public TokenBase
+    {
+    public:
+        PrimaryToken(Process& source, DWORD access = TOKEN_ALL_ACCESS, bool duplicate = false);
+    };
+
+    typedef std::shared_ptr<PrimaryToken> PrimaryTokenPtr;
+
+    class ImpersonateToken : public TokenBase
     {
     public:
         ImpersonateToken(Process& source, DWORD access = TOKEN_ALL_ACCESS);
     };
+
+    typedef std::shared_ptr<ImpersonateToken> ImpersonateTokenPtr;
 
     class SecurityDescriptor
     {
@@ -180,6 +228,14 @@ namespace System
         TokenAccessChecker(ImpersonateToken& token);
         
         bool IsAccessible(SecurityDescriptor& descriptor, DWORD desiredAccess);
+    };
+
+// =================
+
+    class File : public Handle
+    {
+    public:
+        File(const wchar_t* path, DWORD access = READ_CONTROL, DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
     };
 
 // =================

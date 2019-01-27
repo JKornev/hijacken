@@ -99,4 +99,13 @@ namespace Utils
         }
     }
 
+    void ExtractFileDirectory(std::wstring& path, std::wstring& directory)
+    {
+        auto index = path.rfind('\\');
+        if (index == std::wstring::npos)
+            directory.clear();
+        else
+            directory = path.substr(0, index);
+    }
+
 };
