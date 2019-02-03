@@ -2,6 +2,8 @@
 
 #include "Utils.h"
 #include "System.h"
+#include "ProcessScan.h"
+#include <set>
 
 namespace Commands
 {
@@ -67,18 +69,16 @@ namespace Commands
 
 // =================
 
-    class ScanProcess : public ICommand, protected ImpersonationOptions
+    class ScanProcess : 
+        public ICommand, 
+        protected ImpersonationOptions, 
+        protected Engine::ProcessScanEngine
     {
     private:
         DWORD _targetProcessId;
 
-        void ScanImage(System::TokenAccessChecker& access, System::ProcessInformation& info);
-        void ScanCurrentDirectory(System::TokenAccessChecker& access, System::ProcessEnvironmentBlock& peb);
-        void ScanEnvironmentPaths(System::TokenAccessChecker& access, System::ProcessEnvironmentBlock& peb);
-        void ScanModules(System::TokenAccessChecker& access, System::ProcessInformation& info);
-
-        bool IsFileWritable(std::wstring path, System::TokenAccessChecker& access);
-        bool IsDirWritable(std::wstring path, System::TokenAccessChecker& access);
+        std::map<DetectionDirType,  std::set<std::wstring>> _detectedDirs;
+        std::map<DetectionFileType, std::set<std::wstring>> _detectedFiles;
 
     public:
         ScanProcess();
@@ -86,11 +86,18 @@ namespace Commands
 
         virtual void LoadArgs(Utils::Arguments& args);
         virtual void Perform();
+
+    protected:
+        virtual void NotifyWritableDirectory(DetectionDirType detection, std::wstring& dirPath);
+        virtual void NotifyWritableFile(DetectionFileType detection, std::wstring& filePath);
     };
 
 // =================
 
-    class ScanProcesses : public ICommand
+    class ScanProcesses : 
+        public ICommand, 
+        protected ImpersonationOptions, 
+        protected Engine::ProcessScanEngine
     {
     private:
 
@@ -100,6 +107,10 @@ namespace Commands
 
         virtual void LoadArgs(Utils::Arguments& args);
         virtual void Perform();
+
+    protected:
+        virtual void NotifyWritableDirectory(DetectionDirType detection, std::wstring& dirPath);
+        virtual void NotifyWritableFile(DetectionFileType detection, std::wstring& filePath);
     };
 
 // =================

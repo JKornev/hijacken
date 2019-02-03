@@ -153,11 +153,13 @@
   <ItemGroup>
     <ClCompile Include="Commands.cpp" />
     <ClCompile Include="Hijacken.cpp" />
+    <ClCompile Include="ProcessScan.cpp" />
     <ClCompile Include="Utils.cpp" />
     <ClCompile Include="System.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Commands.h" />
+    <ClInclude Include="ProcessScan.h" />
     <ClInclude Include="Utils.h" />
     <ClInclude Include="System.h" />
   </ItemGroup>

@@ -12,12 +12,12 @@ namespace System
     Handle::Handle() :
         std::shared_ptr<void>(0, &ObjectDeleter)
     {
-        }
+    }
 
     Handle::Handle(HANDLE object, DestroyObjectRoutine destroyer) :
         std::shared_ptr<void>(object, destroyer)
     {
-        }
+    }
 
     void Handle::ObjectDeleter(HANDLE object)
     {
