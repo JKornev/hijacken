@@ -169,7 +169,8 @@ namespace System
         MediumPlus,
         High,
         System,
-        //Protected ???
+        Protected,
+        Secure
     };
 
     class TokenBase : public Handle
@@ -183,6 +184,9 @@ namespace System
         TokenIntegrityLvl GetIntegrityLevel();
         void SetIntegrityLevel(TokenIntegrityLvl level);
 
+        HANDLE GetLinkedToken();
+        void SetLinkedToken(HANDLE token);
+
     private:
         PSID AllocateSidByIntegrityLevel(TokenIntegrityLvl level);
     };
@@ -191,6 +195,7 @@ namespace System
     {
     public:
         PrimaryToken(Process& source, DWORD access = TOKEN_ALL_ACCESS, bool duplicate = false);
+        PrimaryToken(HANDLE token, bool duplicate = false);
     };
 
     typedef std::shared_ptr<PrimaryToken> PrimaryTokenPtr;
@@ -199,6 +204,7 @@ namespace System
     {
     public:
         ImpersonateToken(Process& source, DWORD access = TOKEN_ALL_ACCESS);
+        ImpersonateToken(HANDLE token, bool duplicate = false);
     };
 
     typedef std::shared_ptr<ImpersonateToken> ImpersonateTokenPtr;
@@ -227,7 +233,7 @@ namespace System
         TokenAccessChecker(Process& process);
         TokenAccessChecker(ImpersonateToken& token);
         
-        bool IsAccessible(SecurityDescriptor& descriptor, DWORD desiredAccess);
+        bool IsFileObjectAccessible(SecurityDescriptor& descriptor, DWORD desiredAccess);
     };
 
 // =================

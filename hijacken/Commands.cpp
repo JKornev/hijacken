@@ -44,27 +44,87 @@ namespace Commands
         }
     }
 
-    System::ImpersonateTokenPtr ImpersonationOptions::PrepareToken()
+    System::ImpersonateTokenPtr ImpersonationOptions::CraftToken()
     {
         System::Process target(_tokenSourceProcessId, PROCESS_QUERY_INFORMATION);
         auto token = System::ImpersonateTokenPtr(new System::ImpersonateToken(target, TOKEN_ADJUST_DEFAULT | TOKEN_QUERY /*| TOKEN_ASSIGN_PRIMARY*/));
 
         if (_changeIntegrityLevel)
-        {
-            auto integrity = token->GetIntegrityLevel();
-            if (integrity < _tokenIntegrityLevel)
-                throw Utils::Exception(L"There is no way to elevate token's integrity level to higher value");
-            
-            if (integrity > _tokenIntegrityLevel)
-                token->SetIntegrityLevel(_tokenIntegrityLevel);
-        }
+            ChangeIntegrity(token, _tokenIntegrityLevel);
 
         return token;
     }
 
+    void ImpersonationOptions::ChangeIntegrity(System::ImpersonateTokenPtr& token, System::TokenIntegrityLvl)
+    {
+        // This routine changes current integrity level for the token. By OS design you are only able to decrease IL,
+        // but here we use a trick with "Linked Token" that makes us able to get an Elevated token with disabled
+        // impersonation (impersonation level SecurityIdentification). This token can be used for AccessCheck.
+        auto expectedIntegrity = _tokenIntegrityLevel;
+        auto currentIntegrity = token->GetIntegrityLevel();
+
+        if (currentIntegrity == expectedIntegrity)
+            return;
+
+        if (expectedIntegrity > System::TokenIntegrityLvl::System)
+            throw Utils::Exception(L"Unsupported integrity level");
+
+        if (expectedIntegrity == System::TokenIntegrityLvl::System && currentIntegrity != expectedIntegrity)
+            throw Utils::Exception(L"Token for interactive session can't be elevated to SYSTEM integrity level");
+
+        if (expectedIntegrity == System::TokenIntegrityLvl::MediumPlus && currentIntegrity != expectedIntegrity)
+            throw Utils::Exception(L"Token can't be elevated to MediumPlus integrity level");
+
+        auto RenewToken = [&token, &currentIntegrity](HANDLE newToken)
+        {
+            token.reset(new System::ImpersonateToken(newToken));
+            currentIntegrity = token->GetIntegrityLevel();
+        };
+
+        // Elevate integrity level
+        if (currentIntegrity < expectedIntegrity)
+        {
+            // If we are going to elevate a token integrity level using "Linked Token" we should do a two attempts because in 
+            // the worst case (ex. from Low to High) we should evevate Current IL -> Medium IL, than Medium IL -> High IL
+            for (int i = 0; i < 2; i++)
+            {
+                if (currentIntegrity > expectedIntegrity)
+                    break;
+
+                RenewToken(token->GetLinkedToken());
+
+                if (currentIntegrity == expectedIntegrity)
+                    return;
+            }
+
+            if (currentIntegrity < expectedIntegrity)
+                throw Utils::Exception(L"Attempt to elevate token has been failed");
+        }
+
+        // Decrease integrity level
+        if (currentIntegrity > expectedIntegrity)
+        {
+            if (currentIntegrity == System::TokenIntegrityLvl::High)
+            {
+                RenewToken(token->GetLinkedToken());
+                if (currentIntegrity == System::TokenIntegrityLvl::High)
+                    throw Utils::Exception(L"Attempt to elevate token has been failed");
+            }
+            
+            if (currentIntegrity != expectedIntegrity)
+                token->SetIntegrityLevel(expectedIntegrity);
+
+            if (token->GetIntegrityLevel() == expectedIntegrity)
+                return;
+        }
+
+        throw Utils::Exception(L"Attempt to prepare token with specific integrity level has been failed");
+    }
+
     System::TokenIntegrityLvl ImpersonationOptions::ConvertStrToIntegrityLevel(std::wstring& level)
     {
-        System::TokenIntegrityLvl integrity;
+        System::TokenIntegrityLvl integrity = System::TokenIntegrityLvl::Untrusted;
+
         if (level == L"system")
             integrity = System::TokenIntegrityLvl::System;
         else if (level == L"high")
@@ -131,10 +191,129 @@ namespace Commands
 
     void ScanProcess::Perform()
     {
-        auto token = ImpersonationOptions::PrepareToken();
-        
-        //TODO:
+        auto token = ImpersonationOptions::CraftToken();
+        System::TokenAccessChecker access(*token);
 
+        System::ProcessInformation info(_targetProcessId);
+        System::ProcessEnvironmentBlock peb(info);
+
+        std::wcout << L"Scan process " << _targetProcessId << L", " << std::endl;
+        std::wcout << L" Integrity level: " << token->GetIntegrityLevel() << std::endl;
+        
+        ScanImage(access, info);
+        ScanCurrentDirectory(access, peb);
+        ScanEnvironmentPaths(access, peb);
+        ScanModules(access, info);
+    }
+
+    void ScanProcess::ScanImage(System::TokenAccessChecker& access, System::ProcessInformation& info)
+    {
+        try
+        {
+            std::wstring imageDir;
+            info.GetImageDirectory(imageDir);
+
+            if (IsDirWritable(imageDir, access))
+            {
+                std::wcout << L" [Img] " << imageDir.c_str() << std::endl;
+                return;
+            }
+
+            std::wstring imageFile;
+            info.GetImagePath(imageFile);
+
+            if (IsFileWritable(imageFile, access))
+            {
+                std::wcout << L" [Img] " << imageFile.c_str() << std::endl;
+                return;
+            }
+        }
+        catch (...)
+        {
+            std::wcout << L" Skipped image scan" << std::endl;
+        }
+    }
+
+    void ScanProcess::ScanCurrentDirectory(System::TokenAccessChecker& access, System::ProcessEnvironmentBlock& peb)
+    {
+        try
+        {
+            std::wstring currentDirPath;
+            peb.GetCurrentDir(currentDirPath);
+
+            if (IsDirWritable(currentDirPath, access))
+            {
+                std::wcout << L" [Cur] " << currentDirPath.c_str() << std::endl;
+                return;
+            }
+        }
+        catch (...)
+        {
+            std::wcout << L" Skipped current dir scan" << std::endl;
+        }
+    }
+
+    void ScanProcess::ScanEnvironmentPaths(System::TokenAccessChecker& access, System::ProcessEnvironmentBlock& peb)
+    {
+        std::wstring pathSet;
+        auto env = peb.GetProcessEnvironment();
+
+        if (!env->GetValue(L"Path", pathSet) && !env->GetValue(L"PATH", pathSet) && !env->GetValue(L"path", pathSet))
+            throw Utils::Exception(L"Can't obtain 'Path' environment variable");
+
+        Utils::SeparatedStrings paths(pathSet, L';');
+
+        for (auto& dir : paths)
+        {
+            try
+            {
+                if (IsDirWritable(dir, access))
+                    std::wcout << L" [Env] " << dir.c_str() << std::endl;
+            }
+            catch (...)
+            {
+            }
+        }
+    }
+
+    void ScanProcess::ScanModules(System::TokenAccessChecker& access, System::ProcessInformation& info)
+    {
+        System::ModulesSnapshot snapshot(info.GetProcess()->GetProcessID());
+        HMODULE module;
+
+        while (snapshot.GetNextModule(module))
+        {
+            std::wstring modulePath, moduleDir;
+            info.GetModulePath(module, modulePath);
+
+            Utils::ExtractFileDirectory(modulePath, moduleDir);
+
+            if (IsDirWritable(moduleDir, access))
+            {
+                std::wcout << L" [Mod] " << moduleDir.c_str() << std::endl;
+                continue;
+            }
+
+            if (IsFileWritable(modulePath, access))
+            {
+                std::wcout << L" [Mod] " << modulePath.c_str() << std::endl;
+                continue;
+            }
+        }
+    }
+
+    bool ScanProcess::IsFileWritable(std::wstring path, System::TokenAccessChecker& access)
+    {
+        System::File file(path.c_str());
+        System::SecurityDescriptor descriptor(file);
+        return access.IsFileObjectAccessible(descriptor, FILE_WRITE_DATA);
+    }
+
+    bool ScanProcess::IsDirWritable(std::wstring path, System::TokenAccessChecker& access)
+    {
+        System::Directory directory(path.c_str());
+        System::SecurityDescriptor descriptor(directory);
+        return access.IsFileObjectAccessible(descriptor, FILE_ADD_FILE);
     }
 
 // =================
@@ -388,14 +567,14 @@ namespace Commands
     {
         System::File file(path.c_str());
         System::SecurityDescriptor descriptor(file);
-        return access.IsAccessible(descriptor, FILE_WRITE_DATA);
+        return access.IsFileObjectAccessible(descriptor, FILE_WRITE_DATA);
     }
 
     bool ScanSystem::IsDirWritable(std::wstring path, System::TokenAccessChecker& access)
     {
         System::Directory directory(path.c_str());
         System::SecurityDescriptor descriptor(directory);
-        return access.IsAccessible(descriptor, FILE_ADD_FILE);
+        return access.IsFileObjectAccessible(descriptor, FILE_ADD_FILE);
     }
 
 // =================

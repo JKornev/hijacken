@@ -242,8 +242,8 @@ namespace System
     {
         _process.reset(
             new Process(
-            processId,
-            PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_READ
+                processId,
+                PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_READ
             )
         );
     }
@@ -422,7 +422,7 @@ namespace System
         priveleges.Privileges[0].Luid = luid;
         priveleges.Privileges[0].Attributes = (enable ? SE_PRIVILEGE_ENABLED : 0);
 
-        if (!::AdjustTokenPrivileges(Handle::GetNativeHandle(), FALSE, &priveleges, sizeof(priveleges), NULL, NULL))
+        if (!::AdjustTokenPrivileges(Handle::GetNativeHandle(), FALSE, &priveleges, sizeof(priveleges), NULL, NULL) || ::GetLastError() != ERROR_SUCCESS)
             throw Utils::Exception(::GetLastError(), L"AdjustTokenPrivileges() failed with code %d", ::GetLastError());
     }
 
@@ -486,6 +486,15 @@ namespace System
         case SECURITY_MANDATORY_SYSTEM_RID:
             level = TokenIntegrityLvl::System;
             break;
+        case SECURITY_MANDATORY_PROTECTED_PROCESS_RID:
+            level = TokenIntegrityLvl::Protected;
+            break;
+        //case 0x6000:
+        //    level = ???;
+        //    break;
+        case 0x7000:
+            level = TokenIntegrityLvl::Secure;
+            break;
         default:
             throw Utils::Exception(L"Unknown mandatory authority %x", sub);
         }
@@ -508,6 +517,23 @@ namespace System
         
         if (!result)
             throw Utils::Exception(error, L"SetTokenInformation(IntegrityLevel) failed with code %d", error);
+    }
+
+    HANDLE TokenBase::GetLinkedToken()
+    {
+        DWORD written = 0;
+        HANDLE linked;
+
+        if (!::GetTokenInformation(Handle::GetNativeHandle(), TokenLinkedToken, &linked, sizeof(linked), &written))
+            throw Utils::Exception(::GetLastError(), L"SetTokenInformation(LinkedToken) failed with code %d", ::GetLastError());
+
+        return linked;
+    }
+
+    void TokenBase::SetLinkedToken(HANDLE token)
+    {
+        if (!::SetTokenInformation(Handle::GetNativeHandle(), TokenLinkedToken, &token, sizeof(token)))
+            throw Utils::Exception(::GetLastError(), L"SetTokenInformation(LinkedToken) failed with code %d", ::GetLastError());
     }
 
     PSID TokenBase::AllocateSidByIntegrityLevel(TokenIntegrityLvl level)
@@ -534,6 +560,12 @@ namespace System
         case TokenIntegrityLvl::System:
             sidName = L"S-1-16-16384";
             break;
+        case TokenIntegrityLvl::Protected:
+            sidName = L"S-1-16-20480";
+            break;
+        case TokenIntegrityLvl::Secure:
+            sidName = L"S-1-16-28672";
+            break;
         default:
             throw Utils::Exception(L"Unknown integrity level %d", level);
             break;
@@ -552,16 +584,29 @@ namespace System
     {
         HANDLE object = nullptr;
 
-        if (!::OpenProcessToken(source.GetNativeHandle(), access, &object))
+        if (!::OpenProcessToken(source.GetNativeHandle(), access | (duplicate ? TOKEN_DUPLICATE : 0), &object))
             throw Utils::Exception(::GetLastError(), L"OpenProcessToken(pid:%d) failed with code %d", source.GetProcessID(), ::GetLastError());
 
         if (duplicate)
         {
+            Handle primary(object);
             if (!::DuplicateTokenEx(object, 0, NULL, SecurityImpersonation, TokenPrimary, &object))
                 throw Utils::Exception(::GetLastError(), L"DuplicateToken(pid:%d) failed with code %d", source.GetProcessID(), ::GetLastError());
         }
 
         Handle::SetHandle(object);
+    }
+
+    PrimaryToken::PrimaryToken(HANDLE token, bool duplicate)
+    {
+        if (duplicate)
+        {
+            Handle primary(token);
+            if (!::DuplicateTokenEx(token, 0, NULL, SecurityImpersonation, TokenPrimary, &token))
+                throw Utils::Exception(::GetLastError(), L"DuplicateToken() failed with code %d", ::GetLastError());
+        }
+
+        Handle::SetHandle(token);
     }
 
 // =================
@@ -570,15 +615,26 @@ namespace System
     {
         HANDLE object = nullptr;
 
-        access |= TOKEN_DUPLICATE;
-
-        if (!::OpenProcessToken(source.GetNativeHandle(), access, &object))
+        if (!::OpenProcessToken(source.GetNativeHandle(), access | TOKEN_DUPLICATE, &object))
             throw Utils::Exception(::GetLastError(), L"OpenProcessToken(pid:%d) failed with code %d", source.GetProcessID(), ::GetLastError());
 
-        if (!::DuplicateTokenEx(object, 0, NULL, SecurityImpersonation, TokenImpersonation, &object))
+        Handle primary(object);
+        if (!::DuplicateTokenEx(object, access, NULL, SecurityImpersonation, TokenImpersonation, &object))
             throw Utils::Exception(::GetLastError(), L"DuplicateToken(pid:%d) failed with code %d", source.GetProcessID(), ::GetLastError());
 
         Handle::SetHandle(object);
+    }
+
+    ImpersonateToken::ImpersonateToken(HANDLE token, bool duplicate)
+    {
+        if (duplicate)
+        {
+            Handle primary(token);
+            if (!::DuplicateTokenEx(token, 0, NULL, SecurityImpersonation, TokenImpersonation, &token))
+                throw Utils::Exception(::GetLastError(), L"DuplicateToken() failed with code %d", ::GetLastError());
+        }
+
+        Handle::SetHandle(token);
     }
 
 // =================
@@ -623,7 +679,7 @@ namespace System
     {
     }
 
-    bool TokenAccessChecker::IsAccessible(SecurityDescriptor& descriptor, DWORD desiredAccess)
+    bool TokenAccessChecker::IsFileObjectAccessible(SecurityDescriptor& descriptor, DWORD desiredAccess)
     {
         BOOL accessStatus = FALSE;
         GENERIC_MAPPING mapping = {};
@@ -631,17 +687,16 @@ namespace System
         DWORD dwPrivSetSize = sizeof(PRIVILEGE_SET);
         DWORD dwAccessAllowed = 0;
 
-        //TODO: common logic
         mapping.GenericRead  = FILE_GENERIC_READ;
         mapping.GenericWrite = FILE_GENERIC_WRITE;
         mapping.GenericAll   = FILE_GENERIC_READ | FILE_GENERIC_WRITE;
 
         MapGenericMask(&desiredAccess, &mapping);
 
-        if (!IsValidSecurityDescriptor(descriptor.GetNativeSecurityDescriptor()))
-            std::wcout << L"invalid" << std::endl;
+        if (!::IsValidSecurityDescriptor(descriptor.GetNativeSecurityDescriptor()))
+            throw Utils::Exception(::GetLastError(), L"IsValidSecurityDescriptor() failed with code %d", ::GetLastError());
 
-        if (!AccessCheck(descriptor.GetNativeSecurityDescriptor(), _token.GetNativeHandle(), desiredAccess, &mapping, &PrivilegeSet, &dwPrivSetSize, &dwAccessAllowed, &accessStatus))
+        if (!::AccessCheck(descriptor.GetNativeSecurityDescriptor(), _token.GetNativeHandle(), desiredAccess, &mapping, &PrivilegeSet, &dwPrivSetSize, &dwAccessAllowed, &accessStatus))
             throw Utils::Exception(::GetLastError(), L"AccessCheck() failed with code %d", ::GetLastError());
 
         return (accessStatus != FALSE);

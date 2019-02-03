@@ -27,13 +27,14 @@ namespace Commands
         bool  _changeIntegrityLevel;
         System::TokenIntegrityLvl _tokenIntegrityLevel;
 
+        void ChangeIntegrity(System::ImpersonateTokenPtr& token, System::TokenIntegrityLvl);
         static System::TokenIntegrityLvl ConvertStrToIntegrityLevel(std::wstring& level);
 
     protected:
         ImpersonationOptions();
 
         void LoadArgs(Utils::Arguments& args);
-        System::ImpersonateTokenPtr PrepareToken();
+        System::ImpersonateTokenPtr CraftToken();
     };
 
 // =================
@@ -70,6 +71,14 @@ namespace Commands
     {
     private:
         DWORD _targetProcessId;
+
+        void ScanImage(System::TokenAccessChecker& access, System::ProcessInformation& info);
+        void ScanCurrentDirectory(System::TokenAccessChecker& access, System::ProcessEnvironmentBlock& peb);
+        void ScanEnvironmentPaths(System::TokenAccessChecker& access, System::ProcessEnvironmentBlock& peb);
+        void ScanModules(System::TokenAccessChecker& access, System::ProcessInformation& info);
+
+        bool IsFileWritable(std::wstring path, System::TokenAccessChecker& access);
+        bool IsDirWritable(std::wstring path, System::TokenAccessChecker& access);
 
     public:
         ScanProcess();
