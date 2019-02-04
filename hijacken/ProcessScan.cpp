@@ -124,4 +124,38 @@ namespace Engine
         System::SecurityDescriptor descriptor(directory);
         return access.IsFileObjectAccessible(descriptor, FILE_ADD_FILE);
     }
+
+    const wchar_t* ProcessScanEngine::ConvertDirDetectionToString(DetectionDirType detection)
+    {
+        switch (detection)
+        {
+        case DetectionDirType::Executable:
+            return L"Executable directory";
+        case DetectionDirType::Current:
+            return L"Current directory";
+        case DetectionDirType::Users:
+            return L"Users directory";
+        case DetectionDirType::Environment:
+            return L"Environment directory";
+        case DetectionDirType::LoadedModule:
+            return L"Module directory";
+        default:
+            break;
+        }
+        return L"Unknown";
+    }
+
+    const wchar_t* ProcessScanEngine::ConvertFileDetectionToString(DetectionFileType detection)
+    {
+        switch (detection)
+        {
+        case DetectionFileType::Executable:
+            return L"Executable file";
+        case DetectionFileType::LoadedModule:
+            return L"Loaded module";
+        default:
+            break;
+        }
+        return L"Unknown";
+    }
 }

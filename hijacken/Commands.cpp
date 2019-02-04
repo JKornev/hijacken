@@ -3,11 +3,11 @@
 
 namespace Commands
 {
-    // =================
+// =================
 
-    ImpersonationOptions::ImpersonationOptions() : 
-        _tokenSourceProcessId(::GetCurrentProcessId()), 
-        _tokenIntegrityLevel(System::TokenIntegrityLvl::Untrusted),
+    ImpersonationOptions::ImpersonationOptions() :
+        _tokenSourceProcessId(::GetCurrentProcessId()),
+        _tokenIntegrityLevel(System::IntegrityLevel::Untrusted),
         _changeIntegrityLevel(false)
     {
     }
@@ -31,7 +31,7 @@ namespace Commands
             if (!args.Probe(command))
                 return;
         }
-        
+
         if (command == L"/integrity")
         {
             args.SwitchToNext();
@@ -47,7 +47,7 @@ namespace Commands
     System::ImpersonateTokenPtr ImpersonationOptions::CraftToken()
     {
         System::Process target(_tokenSourceProcessId, PROCESS_QUERY_INFORMATION);
-        auto token = System::ImpersonateTokenPtr(new System::ImpersonateToken(target, TOKEN_ADJUST_DEFAULT | TOKEN_QUERY /*| TOKEN_ASSIGN_PRIMARY*/));
+        auto token = System::ImpersonateTokenPtr(new System::ImpersonateToken(target, TOKEN_ADJUST_DEFAULT | TOKEN_QUERY));
 
         if (_changeIntegrityLevel)
             ChangeIntegrity(token, _tokenIntegrityLevel);
@@ -55,10 +55,9 @@ namespace Commands
         return token;
     }
 
-    void ImpersonationOptions::ChangeIntegrity(System::ImpersonateTokenPtr& token, System::TokenIntegrityLvl)
+    void ImpersonationOptions::ChangeIntegrity(System::ImpersonateTokenPtr& token, System::IntegrityLevel expectedIntegrity)
     {
-        auto expectedIntegrity = _tokenIntegrityLevel;
-        auto currentIntegrity = token->GetIntegrityLevel();
+        auto currentIntegrity  = token->GetIntegrityLevel();
 
         if (currentIntegrity == expectedIntegrity)
             return;
@@ -66,11 +65,11 @@ namespace Commands
         if (currentIntegrity < expectedIntegrity)
             throw Utils::Exception(L"Access token can't be elevated to higher integrity level");
 
-        if (currentIntegrity == System::TokenIntegrityLvl::High)
+        if (currentIntegrity == System::IntegrityLevel::High)
         {
             token.reset(new System::ImpersonateToken(token->GetLinkedToken()));
             currentIntegrity = token->GetIntegrityLevel();
-            if (currentIntegrity == System::TokenIntegrityLvl::High)
+            if (currentIntegrity == System::IntegrityLevel::High)
                 throw Utils::Exception(L"Attempt to elevate token has been failed");
         }
 
@@ -83,20 +82,60 @@ namespace Commands
         throw Utils::Exception(L"Attempt to prepare token with specific integrity level has been failed");
     }
 
-    System::TokenIntegrityLvl ImpersonationOptions::ConvertStrToIntegrityLevel(std::wstring& level)
+    System::IntegrityLevel ImpersonationOptions::ConvertStrToIntegrityLevel(std::wstring& level)
     {
-        System::TokenIntegrityLvl integrity = System::TokenIntegrityLvl::Untrusted;
+        auto integrity = System::IntegrityLevel::Untrusted;
 
         if (level == L"medium")
-            integrity = System::TokenIntegrityLvl::Medium;
+            integrity = System::IntegrityLevel::Medium;
         else if (level == L"low")
-            integrity = System::TokenIntegrityLvl::Low;
+            integrity = System::IntegrityLevel::Low;
         else if (level == L"untrusted")
-            integrity = System::TokenIntegrityLvl::Untrusted;
+            integrity = System::IntegrityLevel::Untrusted;
         else
             throw Utils::Exception(L"Unknown integrity level '%d'", integrity);
 
         return integrity;
+    }
+
+    void ImpersonationOptions::PrintTokenInformation(System::ImpersonateTokenPtr& token)
+    {
+        std::wstring str;
+
+        std::wcout << L"Access token information:" << std::endl;
+        token->GetUserNameString(str);
+        std::wcout << L"  " << str.c_str() << std::endl;
+        token->GetUserSIDString(str);
+        std::wcout << L"  " << str.c_str() << std::endl;
+        std::wcout << L"  Integrity: " << ConvertIntegrityLevelToString(token->GetIntegrityLevel()) 
+                   << L", " << (token->IsElevated() ? L"Elevated" : L"Not-Elevated") << std::endl;
+        std::wcout << std::endl;
+    }
+
+    const wchar_t* ImpersonationOptions::ConvertIntegrityLevelToString(System::IntegrityLevel level)
+    {
+        switch (level)
+        {
+        case System::IntegrityLevel::Untrusted:
+            return L"Untrusted";
+        case System::IntegrityLevel::Low:
+            return L"Low";
+        case System::IntegrityLevel::Medium:
+            return L"Medium";
+        case System::IntegrityLevel::MediumPlus:
+            return L"MediumPlus";
+        case System::IntegrityLevel::High:
+            return L"High";
+        case System::IntegrityLevel::System:
+            return L"System";
+        case System::IntegrityLevel::Protected:
+            return L"Protected";
+        case System::IntegrityLevel::Secure:
+            return L"Secure";
+        default:
+            break;
+        }
+        return L"Unknown";
     }
 
 // =================
@@ -131,6 +170,9 @@ namespace Commands
 
     ScanProcess::ScanProcess() : _targetProcessId(0)
     {
+        System::Process self(::GetCurrentProcess());
+        System::PrimaryToken token(self);
+        token.SetPrivilege(L"SeDebugPrivilege", true);
     }
 
     void ScanProcess::LoadArgs(Utils::Arguments& args)
@@ -143,6 +185,9 @@ namespace Commands
         _targetProcessId = _wtoi(command.c_str());
 
         ImpersonationOptions::LoadArgs(args);
+
+        if (!args.IsEnded())
+            throw Utils::Exception(L"Too much arguments");
     }
 
     void ScanProcess::Perform()
@@ -150,14 +195,22 @@ namespace Commands
         auto token = ImpersonationOptions::CraftToken();
         System::TokenAccessChecker access(*token);
 
-        std::wcout << L"Scan process " << _targetProcessId << L", " << std::endl;
-        std::wcout << L" Integrity level: " << token->GetIntegrityLevel() << std::endl;
+        ImpersonationOptions::PrintTokenInformation(token);
 
         Engine::ProcessScanEngine::Scan(_targetProcessId, access);
 
         for (auto& detection : _detectedDirs)
         {
-            
+            std::wcout << ConvertDirDetectionToString(detection.first) << L":" << std::endl;
+            for (auto& dir : detection.second)
+                std::wcout << L"  " << dir.c_str() << std::endl;
+        }
+
+        for (auto& detection : _detectedFiles)
+        {
+            std::wcout << ConvertFileDetectionToString(detection.first) << L":" << std::endl;
+            for (auto& file : detection.second)
+                std::wcout << L"  " << file.c_str() << std::endl;
         }
     }
 
@@ -175,11 +228,17 @@ namespace Commands
 
     ScanProcesses::ScanProcesses()
     {
+        System::Process self(::GetCurrentProcess());
+        System::PrimaryToken token(self);
+        token.SetPrivilege(L"SeDebugPrivilege", true);
     }
 
     void ScanProcesses::LoadArgs(Utils::Arguments& args)
     {
         ImpersonationOptions::LoadArgs(args);
+
+        if (!args.IsEnded())
+            throw Utils::Exception(L"Too much arguments");
     }
 
     void ScanProcesses::Perform()
@@ -187,10 +246,15 @@ namespace Commands
         auto token = ImpersonationOptions::CraftToken();
         System::TokenAccessChecker access(*token);
 
+        ImpersonationOptions::PrintTokenInformation(token);
+
+        std::wcout << L"===============" << std::endl;
+        std::wcout << L"   FINDINGS" << std::endl;
+        std::wcout << L"===============" << std::endl << std::endl;
+
         DWORD processId;
         std::wstring processName;
         System::ProcessesSnapshot snapshot;
-
         while (snapshot.GetNextProcess(processId, processName))
         {
             enum { IdlePID = 0, SystemPID = 4 };
@@ -200,25 +264,48 @@ namespace Commands
 
             try
             {
-                std::wcout << L"Scan process " << processId << L", " << processName.c_str() << std::endl;
                 Engine::ProcessScanEngine::Scan(processId, access);
+
+                if (!_detectedDirs.empty() || !_detectedFiles.empty())
+                {
+                    std::wcout << L"Process " << processId << L", " << processName.c_str() << std::endl;
+
+                    for (auto& detection : _detectedDirs)
+                    {
+                        std::wcout << L"  " << ConvertDirDetectionToString(detection.first) << L":" << std::endl;
+                        for (auto& dir : detection.second)
+                            std::wcout << L"    " << dir.c_str() << std::endl;
+                    }
+
+                    for (auto& detection : _detectedFiles)
+                    {
+                        std::wcout << L"  " << ConvertFileDetectionToString(detection.first) << L":" << std::endl;
+                        for (auto& file : detection.second)
+                            std::wcout << L"    " << file.c_str() << std::endl;
+                    }
+
+                    std::wcout << std::endl;
+                }
             }
             catch (Utils::Exception& exception)
             {
-                std::wcout << L"Process with ID " << processId << L" has been skipped, reason: " << exception.GetMessage() << std::endl;
+                //std::wcout << L"Process with ID " << processId << L" has been skipped, reason: " << exception.GetMessage() << std::endl;
                 continue;
             }
+
+            _detectedDirs.clear();
+            _detectedFiles.clear();
         }
     }
 
     void ScanProcesses::NotifyWritableDirectory(DetectionDirType detection, std::wstring& dirPath)
     {
-        std::wcout << L" dir: " << (int)detection << L" " << dirPath.c_str() << std::endl;
+        _detectedDirs[detection].insert(dirPath);
     }
 
     void ScanProcesses::NotifyWritableFile(DetectionFileType detection, std::wstring& filePath)
     {
-        std::wcout << L" file: " << (int)detection << L" " << filePath.c_str() << std::endl;
+        _detectedFiles[detection].insert(filePath);
     }
 
 // =================
@@ -295,177 +382,14 @@ namespace Commands
 
     ScanSystem::ScanSystem()
     {
-        System::Process self(::GetCurrentProcess());
-        System::PrimaryToken token(self);
-        token.SetPrivilege(L"SeDebugPrivilege", true);
     }
 
     void ScanSystem::LoadArgs(Utils::Arguments& args)
     {
-        std::wstring command;
-
-        _tokenSourceId = ::GetCurrentProcessId();
-
-        if (!args.Probe(command))
-            return;
-
-        if (command != L"/toksrc")
-            throw Utils::Exception(L"Invalid command '%s'", command.c_str());
-
-        args.SwitchToNext();
-
-        if (!args.GetNext(command))
-            throw Utils::Exception(L"Invalid command argument '%s'", command.c_str());
-
-        _tokenSourceId = _wtoi(command.c_str());
     }
 
     void ScanSystem::Perform()
     {
-        System::Process process(_tokenSourceId, PROCESS_QUERY_INFORMATION);
-        System::ImpersonateToken token(process);
-        System::TokenAccessChecker access(token);
-
-        DWORD processId;
-        std::wstring processName;
-        System::ProcessesSnapshot snapshot;
-
-        while (snapshot.GetNextProcess(processId, processName))
-        {
-            enum { IdlePID = 0, SystemPID = 4 };
-
-            if (processId == IdlePID || processId == SystemPID)
-                continue;
-
-            try
-            {
-                System::ProcessInformation info(processId);
-                System::ProcessEnvironmentBlock peb(info);
-
-                std::wcout << L"Scan process " << processId << L", " << processName.c_str() << std::endl;
-                std::wcout << L" Integrity level: " << token.GetIntegrityLevel() << std::endl;
-
-                ScanImage(access, info);
-                ScanCurrentDirectory(access, peb);
-                ScanEnvironmentPaths(access, peb);
-                ScanModules(access, info);
-            }
-            catch (Utils::Exception& exception)
-            {
-                std::wcout << L"Process with ID " << processId << L" has been skipped, reason: " << exception.GetMessage() << std::endl;
-                continue;
-            }
-        }
-    }
-
-    void ScanSystem::ScanImage(System::TokenAccessChecker& access, System::ProcessInformation& info)
-    {
-        try
-        {
-            std::wstring imageDir;
-            info.GetImageDirectory(imageDir);
-
-            if (IsDirWritable(imageDir, access))
-            {
-                std::wcout << L" [Img] " << imageDir.c_str() << std::endl;
-                return;
-            }
-
-            std::wstring imageFile;
-            info.GetImagePath(imageFile);
-
-            if (IsFileWritable(imageFile, access))
-            {
-                std::wcout << L" [Img] " << imageFile.c_str() << std::endl;
-                return;
-            }
-        }
-        catch (...)
-        {
-            std::wcout << L" Skipped image scan" << std::endl;
-        }
-    }
-
-    void ScanSystem::ScanCurrentDirectory(System::TokenAccessChecker& access, System::ProcessEnvironmentBlock& peb)
-    {
-        try
-        {
-            std::wstring currentDirPath;
-            peb.GetCurrentDir(currentDirPath);
-
-            if (IsDirWritable(currentDirPath, access))
-            {
-                std::wcout << L" [Cur] " << currentDirPath.c_str() << std::endl;
-                return;
-            }
-        }
-        catch (...)
-        {
-            std::wcout << L" Skipped current dir scan" << std::endl;
-        }
-    }
-
-    void ScanSystem::ScanEnvironmentPaths(System::TokenAccessChecker& access, System::ProcessEnvironmentBlock& peb)
-    {
-        std::wstring pathSet;
-        auto env = peb.GetProcessEnvironment();
-
-        if (!env->GetValue(L"Path", pathSet) && !env->GetValue(L"PATH", pathSet) && !env->GetValue(L"path", pathSet))
-            throw Utils::Exception(L"Can't obtain 'Path' environment variable");
-
-        Utils::SeparatedStrings paths(pathSet, L';');
-
-        for (auto& dir : paths)
-        {
-            try
-            {
-                if (IsDirWritable(dir, access))
-                    std::wcout << L" [Env] " << dir.c_str() << std::endl;
-            }
-            catch (...)
-            {
-            }
-        }
-    }
-
-    void ScanSystem::ScanModules(System::TokenAccessChecker& access, System::ProcessInformation& info)
-    {
-        System::ModulesSnapshot snapshot(info.GetProcess()->GetProcessID());
-        HMODULE module;
-        
-        while (snapshot.GetNextModule(module))
-        {
-            std::wstring modulePath, moduleDir;
-            info.GetModulePath(module, modulePath);
-
-            Utils::ExtractFileDirectory(modulePath, moduleDir);
-            
-            if (IsDirWritable(moduleDir, access))
-            {
-                std::wcout << L" [Mod] " << moduleDir.c_str() << std::endl;
-                continue;
-            }
-
-            if (IsFileWritable(modulePath, access))
-            {
-                std::wcout << L" [Mod] " << modulePath.c_str() << std::endl;
-                continue;
-            }
-        }
-    }
-
-    bool ScanSystem::IsFileWritable(std::wstring path, System::TokenAccessChecker& access)
-    {
-        System::File file(path.c_str());
-        System::SecurityDescriptor descriptor(file);
-        return access.IsFileObjectAccessible(descriptor, FILE_WRITE_DATA);
-    }
-
-    bool ScanSystem::IsDirWritable(std::wstring path, System::TokenAccessChecker& access)
-    {
-        System::Directory directory(path.c_str());
-        System::SecurityDescriptor descriptor(directory);
-        return access.IsFileObjectAccessible(descriptor, FILE_ADD_FILE);
     }
 
 // =================

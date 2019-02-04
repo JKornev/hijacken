@@ -422,11 +422,12 @@ namespace System
         priveleges.Privileges[0].Luid = luid;
         priveleges.Privileges[0].Attributes = (enable ? SE_PRIVILEGE_ENABLED : 0);
 
-        if (!::AdjustTokenPrivileges(Handle::GetNativeHandle(), FALSE, &priveleges, sizeof(priveleges), NULL, NULL) || ::GetLastError() != ERROR_SUCCESS)
+        //TODO: query privelege if it's different than set it and check getlasterror()
+        if (!::AdjustTokenPrivileges(Handle::GetNativeHandle(), FALSE, &priveleges, sizeof(priveleges), NULL, NULL) /*|| ::GetLastError() != ERROR_SUCCESS*/)
             throw Utils::Exception(::GetLastError(), L"AdjustTokenPrivileges() failed with code %d", ::GetLastError());
     }
 
-    TokenIntegrityLvl TokenBase::GetIntegrityLevel()
+    IntegrityLevel TokenBase::GetIntegrityLevel()
     {
         std::string buffer;
         DWORD written = 0;
@@ -463,37 +464,37 @@ namespace System
         if (!::IsValidSid(mandatory->Label.Sid))
             throw Utils::Exception(L"A seed you received isn't valid");
 
-        TokenIntegrityLvl level;
+        IntegrityLevel level;
         auto sub = *::GetSidSubAuthority(mandatory->Label.Sid, 0);
 
         switch (sub)
         {
         case SECURITY_MANDATORY_UNTRUSTED_RID:
-            level = TokenIntegrityLvl::Untrusted;
+            level = IntegrityLevel::Untrusted;
             break;
         case SECURITY_MANDATORY_LOW_RID:
-            level = TokenIntegrityLvl::Low;
+            level = IntegrityLevel::Low;
             break;
         case SECURITY_MANDATORY_MEDIUM_RID:
-            level = TokenIntegrityLvl::Medium;
+            level = IntegrityLevel::Medium;
             break;
         case SECURITY_MANDATORY_MEDIUM_PLUS_RID:
-            level = TokenIntegrityLvl::MediumPlus;
+            level = IntegrityLevel::MediumPlus;
             break;
         case SECURITY_MANDATORY_HIGH_RID:
-            level = TokenIntegrityLvl::High;
+            level = IntegrityLevel::High;
             break;
         case SECURITY_MANDATORY_SYSTEM_RID:
-            level = TokenIntegrityLvl::System;
+            level = IntegrityLevel::System;
             break;
         case SECURITY_MANDATORY_PROTECTED_PROCESS_RID:
-            level = TokenIntegrityLvl::Protected;
+            level = IntegrityLevel::Protected;
             break;
         //case 0x6000:
         //    level = ???;
         //    break;
         case 0x7000:
-            level = TokenIntegrityLvl::Secure;
+            level = IntegrityLevel::Secure;
             break;
         default:
             throw Utils::Exception(L"Unknown mandatory authority %x", sub);
@@ -502,7 +503,7 @@ namespace System
         return level;
     }
 
-    void TokenBase::SetIntegrityLevel(TokenIntegrityLvl level)
+    void TokenBase::SetIntegrityLevel(IntegrityLevel level)
     {
         auto sid = AllocateSidByIntegrityLevel(level);
 
@@ -536,34 +537,90 @@ namespace System
             throw Utils::Exception(::GetLastError(), L"SetTokenInformation(LinkedToken) failed with code %d", ::GetLastError());
     }
 
-    PSID TokenBase::AllocateSidByIntegrityLevel(TokenIntegrityLvl level)
+    void TokenBase::GetUserNameString(std::wstring& userName)
+    {
+        DWORD written = 0;
+        char buffer[256];
+
+        if (!::GetTokenInformation(Handle::GetNativeHandle(), TokenUser, &buffer, sizeof(buffer), &written))
+            throw Utils::Exception(::GetLastError(), L"GetTokenInformation(TokenUser) failed with code %d", ::GetLastError());
+
+        auto user = reinterpret_cast<PTOKEN_USER>(buffer);
+
+        wchar_t name[256], domain[256];
+        DWORD nameSize = _countof(name),
+            domainSize = _countof(domain);
+        SID_NAME_USE type;
+        if (!::LookupAccountSidW(NULL, user->User.Sid, name, &nameSize, domain, &domainSize, &type))
+            throw Utils::Exception(::GetLastError(), L"LookupAccountSidW() failed with code %d", ::GetLastError());
+
+        if (domainSize > 1)
+        {
+            userName = domain;
+            userName += L"\\";
+            userName += name;
+        }
+        else
+        {
+            userName = name;
+        }
+    }
+
+    void TokenBase::GetUserSIDString(std::wstring& sid)
+    {
+        DWORD written = 0;
+        char buffer[256];
+
+        if (!::GetTokenInformation(Handle::GetNativeHandle(), TokenUser, &buffer, sizeof(buffer), &written))
+            throw Utils::Exception(::GetLastError(), L"GetTokenInformation(TokenUser) failed with code %d", ::GetLastError());
+
+        LPWSTR sidString = nullptr;
+        auto user = reinterpret_cast<PTOKEN_USER>(buffer);
+        if (!::ConvertSidToStringSidW(user->User.Sid, &sidString))
+            throw Utils::Exception(::GetLastError(), L"ConvertSidToStringSid() failed with code %d", ::GetLastError());
+
+        sid = sidString;
+    }
+
+    bool TokenBase::IsElevated()
+    {
+        DWORD written = 0;
+        TOKEN_ELEVATION elevated;
+
+        if (!::GetTokenInformation(Handle::GetNativeHandle(), TokenElevation, &elevated, sizeof(elevated), &written))
+            throw Utils::Exception(::GetLastError(), L"GetTokenInformation(TokenElevation) failed with code %d", ::GetLastError());
+
+        return (elevated.TokenIsElevated ? true : false);
+    }
+
+    PSID TokenBase::AllocateSidByIntegrityLevel(IntegrityLevel level)
     {
         std::wstring sidName;
 
         switch (level)
         {
-        case TokenIntegrityLvl::Untrusted:
+        case IntegrityLevel::Untrusted:
             sidName = L"S-1-16-0";
             break;
-        case TokenIntegrityLvl::Low:
+        case IntegrityLevel::Low:
             sidName = L"S-1-16-4096";
             break;
-        case TokenIntegrityLvl::Medium:
+        case IntegrityLevel::Medium:
             sidName = L"S-1-16-8192";
             break;
-        case TokenIntegrityLvl::MediumPlus:
+        case IntegrityLevel::MediumPlus:
             sidName = L"S-1-16-8448";
             break;
-        case TokenIntegrityLvl::High:
+        case IntegrityLevel::High:
             sidName = L"S-1-16-12288";
             break;
-        case TokenIntegrityLvl::System:
+        case IntegrityLevel::System:
             sidName = L"S-1-16-16384";
             break;
-        case TokenIntegrityLvl::Protected:
+        case IntegrityLevel::Protected:
             sidName = L"S-1-16-20480";
             break;
-        case TokenIntegrityLvl::Secure:
+        case IntegrityLevel::Secure:
             sidName = L"S-1-16-28672";
             break;
         default:

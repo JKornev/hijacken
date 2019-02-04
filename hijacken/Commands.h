@@ -27,16 +27,20 @@ namespace Commands
     private:
         DWORD _tokenSourceProcessId;
         bool  _changeIntegrityLevel;
-        System::TokenIntegrityLvl _tokenIntegrityLevel;
-
-        void ChangeIntegrity(System::ImpersonateTokenPtr& token, System::TokenIntegrityLvl);
-        static System::TokenIntegrityLvl ConvertStrToIntegrityLevel(std::wstring& level);
+        System::IntegrityLevel _tokenIntegrityLevel;
 
     protected:
         ImpersonationOptions();
 
         void LoadArgs(Utils::Arguments& args);
         System::ImpersonateTokenPtr CraftToken();
+        
+        static void PrintTokenInformation(System::ImpersonateTokenPtr& token);
+        static const wchar_t* ConvertIntegrityLevelToString(System::IntegrityLevel level);
+
+    private:
+        void ChangeIntegrity(System::ImpersonateTokenPtr& token, System::IntegrityLevel level);
+        static System::IntegrityLevel ConvertStrToIntegrityLevel(std::wstring& level);
     };
 
 // =================
@@ -100,6 +104,9 @@ namespace Commands
         protected Engine::ProcessScanEngine
     {
     private:
+
+        std::map<DetectionDirType, std::set<std::wstring>> _detectedDirs;
+        std::map<DetectionFileType, std::set<std::wstring>> _detectedFiles;
 
     public:
         ScanProcesses();
@@ -188,15 +195,6 @@ namespace Commands
     class ScanSystem : public ICommand
     {
     private:
-        DWORD _tokenSourceId;
-
-        void ScanImage(System::TokenAccessChecker& access, System::ProcessInformation& info);
-        void ScanCurrentDirectory(System::TokenAccessChecker& access, System::ProcessEnvironmentBlock& peb);
-        void ScanEnvironmentPaths(System::TokenAccessChecker& access, System::ProcessEnvironmentBlock& peb);
-        void ScanModules(System::TokenAccessChecker& access, System::ProcessInformation& info);
-
-        bool IsFileWritable(std::wstring path, System::TokenAccessChecker& access);
-        bool IsDirWritable(std::wstring path, System::TokenAccessChecker& access);
 
     public:
         ScanSystem();

@@ -30,6 +30,9 @@ namespace Engine
         virtual void NotifyWritableDirectory(DetectionDirType detection, std::wstring& dirPath) = 0;
         virtual void NotifyWritableFile(DetectionFileType detection, std::wstring& filePath) = 0;
 
+        static const wchar_t* ConvertDirDetectionToString(DetectionDirType detection);
+        static const wchar_t* ConvertFileDetectionToString(DetectionFileType detection);
+
     private:
 
         void ScanImage(System::TokenAccessChecker& access, System::ProcessInformation& info);

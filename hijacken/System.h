@@ -159,7 +159,7 @@ namespace System
 
 // =================
 
-    enum TokenIntegrityLvl
+    enum class IntegrityLevel
     {
         Untrusted,
         //BelowLow, ???
@@ -181,14 +181,19 @@ namespace System
     public:
         void SetPrivilege(wchar_t* privelege, bool enable);
 
-        TokenIntegrityLvl GetIntegrityLevel();
-        void SetIntegrityLevel(TokenIntegrityLvl level);
+        IntegrityLevel GetIntegrityLevel();
+        void SetIntegrityLevel(IntegrityLevel level);
 
         HANDLE GetLinkedToken();
         void SetLinkedToken(HANDLE token);
 
+        void GetUserNameString(std::wstring& userName);
+        void GetUserSIDString(std::wstring& sid);
+
+        bool IsElevated();
+
     private:
-        PSID AllocateSidByIntegrityLevel(TokenIntegrityLvl level);
+        PSID AllocateSidByIntegrityLevel(IntegrityLevel level);
     };
 
     class PrimaryToken : public TokenBase

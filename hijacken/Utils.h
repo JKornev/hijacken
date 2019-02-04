@@ -50,6 +50,8 @@ namespace Utils
         bool Probe(std::wstring& arg);
         bool SwitchToNext();
         bool GetNext(std::wstring& arg);
+
+        bool IsEnded();
     };
 
     // =================

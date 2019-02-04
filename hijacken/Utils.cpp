@@ -83,6 +83,11 @@ namespace Utils
         return true;
     }
 
+    bool Arguments::IsEnded()
+    {
+        return (_index >= _arguments.size());
+    }
+
 // =================
 
     SeparatedStrings::SeparatedStrings(std::wstring& str, wchar_t seporator)
