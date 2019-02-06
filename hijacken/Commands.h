@@ -45,9 +45,28 @@ namespace Commands
 
 // =================
 
-    class ScanFile : public ICommand
+    class SystemOptions
     {
     private:
+        bool _scanElevated;
+
+    protected:
+        SystemOptions();
+
+        void LoadArgs(Utils::Arguments& args);
+        bool ShouldScanProcess(System::ImpersonateTokenPtr& token, DWORD targetProcessId);
+    };
+
+// =================
+
+    class ScanFile : 
+        public ICommand,
+        protected ImpersonationOptions
+    {
+    private:
+        bool _unwindImports;
+        bool _scanDelayLoad;
+        bool _checkAccess;
 
     public:
         ScanFile();
@@ -59,7 +78,9 @@ namespace Commands
 
 // =================
 
-    class ScanDirectory : public ICommand
+    class ScanDirectory : 
+        public ICommand,
+        protected SystemOptions
     {
     private:
 
@@ -100,12 +121,13 @@ namespace Commands
 
     class ScanProcesses : 
         public ICommand, 
+        protected SystemOptions,
         protected ImpersonationOptions, 
         protected Engine::ProcessScanEngine
     {
     private:
 
-        std::map<DetectionDirType, std::set<std::wstring>> _detectedDirs;
+        std::map<DetectionDirType,  std::set<std::wstring>> _detectedDirs;
         std::map<DetectionFileType, std::set<std::wstring>> _detectedFiles;
 
     public:
@@ -122,7 +144,9 @@ namespace Commands
 
 // =================
 
-    class ScanAutorun : public ICommand
+    class ScanAutorun : 
+        public ICommand,
+        protected SystemOptions
     {
     private:
 
@@ -150,7 +174,9 @@ namespace Commands
 
 // =================
 
-    class ScanTasks : public ICommand
+    class ScanTasks : 
+        public ICommand,
+        protected SystemOptions
     {
     private:
 
@@ -178,7 +204,9 @@ namespace Commands
 
 // =================
 
-    class ScanServices : public ICommand
+    class ScanServices : 
+        public ICommand,
+        protected SystemOptions
     {
     private:
 

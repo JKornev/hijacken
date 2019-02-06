@@ -57,7 +57,7 @@ namespace Commands
 
     void ImpersonationOptions::ChangeIntegrity(System::ImpersonateTokenPtr& token, System::IntegrityLevel expectedIntegrity)
     {
-        auto currentIntegrity  = token->GetIntegrityLevel();
+        auto currentIntegrity = token->GetIntegrityLevel();
 
         if (currentIntegrity == expectedIntegrity)
             return;
@@ -107,8 +107,8 @@ namespace Commands
         std::wcout << L"  " << str.c_str() << std::endl;
         token->GetUserSIDString(str);
         std::wcout << L"  " << str.c_str() << std::endl;
-        std::wcout << L"  Integrity: " << ConvertIntegrityLevelToString(token->GetIntegrityLevel()) 
-                   << L", " << (token->IsElevated() ? L"Elevated" : L"Not-Elevated") << std::endl;
+        std::wcout << L"  Integrity: " << ConvertIntegrityLevelToString(token->GetIntegrityLevel())
+            << L", " << (token->IsElevated() ? L"Elevated" : L"Not-Elevated") << std::endl;
         std::wcout << std::endl;
     }
 
@@ -140,12 +140,80 @@ namespace Commands
 
 // =================
 
-    ScanFile::ScanFile()
+    SystemOptions::SystemOptions() : 
+        _scanElevated(false)
+    {
+    }
+
+    void SystemOptions::LoadArgs(Utils::Arguments& args)
+    {
+        std::wstring command;
+
+        if (!args.Probe(command))
+            return;
+
+        if (command == L"/elevation")
+        {
+            _scanElevated = true;
+            args.SwitchToNext();
+        }
+    }
+
+    bool SystemOptions::ShouldScanProcess(System::ImpersonateTokenPtr& token, DWORD targetProcessId)
+    {
+        if (!_scanElevated)
+            return true;
+
+        System::Process process(targetProcessId, PROCESS_QUERY_INFORMATION);
+        System::ImpersonateToken targetToken(process);
+        
+        auto sourceIntegrity = token->GetIntegrityLevel();
+        auto targetIntegrity = targetToken.GetIntegrityLevel();
+
+        return (sourceIntegrity < targetIntegrity);
+    }
+
+// =================
+
+    ScanFile::ScanFile() :
+        _unwindImports(true),
+        _scanDelayLoad(true),
+        _checkAccess(false)
     {
     }
 
     void ScanFile::LoadArgs(Utils::Arguments& args)
     {
+        std::wstring option;
+
+        if (!args.Probe(option))
+            return;
+
+        if (option == L"/nounwinding")
+        {
+            _unwindImports = false;
+
+            args.SwitchToNext();
+            if (!args.Probe(option))
+                return;
+        }
+
+        if (option == L"/nodelay")
+        {
+            _scanDelayLoad = false;
+
+            args.SwitchToNext();
+            if (!args.Probe(option))
+                return;
+        }
+
+        if (option == L"/accessible")
+        {
+            _checkAccess = false;
+
+            args.SwitchToNext();
+            ImpersonationOptions::LoadArgs(args);
+        }
     }
 
     void ScanFile::Perform()
@@ -231,10 +299,17 @@ namespace Commands
         System::Process self(::GetCurrentProcess());
         System::PrimaryToken token(self);
         token.SetPrivilege(L"SeDebugPrivilege", true);
+
+        if (token.GetIntegrityLevel() < System::IntegrityLevel::High)
+            std::wcout << std::endl
+                       << L" Warning! Hijacken has been run without administrator rights." << std::endl
+                       << L" Therefore scan is limited to accessible scope of processes." << std::endl
+                       << std::endl;
     }
 
     void ScanProcesses::LoadArgs(Utils::Arguments& args)
     {
+        SystemOptions::LoadArgs(args);
         ImpersonationOptions::LoadArgs(args);
 
         if (!args.IsEnded())
@@ -248,9 +323,9 @@ namespace Commands
 
         ImpersonationOptions::PrintTokenInformation(token);
 
-        std::wcout << L"===============" << std::endl;
+        std::wcout << L"==============" << std::endl;
         std::wcout << L"   FINDINGS" << std::endl;
-        std::wcout << L"===============" << std::endl << std::endl;
+        std::wcout << L"==============" << std::endl << std::endl;
 
         DWORD processId;
         std::wstring processName;
@@ -264,6 +339,9 @@ namespace Commands
 
             try
             {
+                if (!SystemOptions::ShouldScanProcess(token, processId))
+                    continue;
+
                 Engine::ProcessScanEngine::Scan(processId, access);
 
                 if (!_detectedDirs.empty() || !_detectedFiles.empty())
@@ -290,7 +368,6 @@ namespace Commands
             catch (Utils::Exception& exception)
             {
                 //std::wcout << L"Process with ID " << processId << L" has been skipped, reason: " << exception.GetMessage() << std::endl;
-                continue;
             }
 
             _detectedDirs.clear();
