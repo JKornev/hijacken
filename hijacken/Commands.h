@@ -3,6 +3,7 @@
 #include "Utils.h"
 #include "System.h"
 #include "ProcessScan.h"
+#include "ImageScan.h"
 #include <set>
 
 namespace Commands
@@ -61,19 +62,31 @@ namespace Commands
 
     class ScanFile : 
         public ICommand,
-        protected ImpersonationOptions
+        protected ImpersonationOptions,
+        protected Engine::ImageScanEngine
     {
     private:
         bool _unwindImports;
         bool _scanDelayLoad;
         bool _checkAccess;
 
+        std::wstring _filePath;
+
+        void ScanImage(std::string path);
+
     public:
         ScanFile();
         virtual ~ScanFile() {}
 
-        virtual void LoadArgs(Utils::Arguments& args);
-        virtual void Perform();
+        void LoadArgs(Utils::Arguments& args) override;
+        void Perform() override;
+
+    protected:
+        void NotifyLoadImageOrder(Engine::LoadImageOrder& dirs) override;
+        void NotifyVulnerableDll(Engine::ImageDirectory& dir, std::wstring dll) override;
+
+    public:
+        static const wchar_t* ConvertImageDirTypeToString(Engine::ImageDirectory::Type type);
     };
 
 // =================
@@ -88,8 +101,8 @@ namespace Commands
         ScanDirectory();
         virtual ~ScanDirectory() {}
 
-        virtual void LoadArgs(Utils::Arguments& args);
-        virtual void Perform();
+        void LoadArgs(Utils::Arguments& args) override;
+        void Perform() override;
     };
 
 // =================
@@ -109,12 +122,12 @@ namespace Commands
         ScanProcess();
         virtual ~ScanProcess() {}
 
-        virtual void LoadArgs(Utils::Arguments& args);
-        virtual void Perform();
+        void LoadArgs(Utils::Arguments& args) override;
+        void Perform() override;
 
     protected:
-        virtual void NotifyWritableDirectory(DetectionDirType detection, std::wstring& dirPath);
-        virtual void NotifyWritableFile(DetectionFileType detection, std::wstring& filePath);
+        void NotifyWritableDirectory(DetectionDirType detection, std::wstring& dirPath) override;
+        void NotifyWritableFile(DetectionFileType detection, std::wstring& filePath) override;
     };
 
 // =================
@@ -134,12 +147,12 @@ namespace Commands
         ScanProcesses();
         virtual ~ScanProcesses() {}
 
-        virtual void LoadArgs(Utils::Arguments& args);
-        virtual void Perform();
+        void LoadArgs(Utils::Arguments& args) override;
+        void Perform() override;
 
     protected:
-        virtual void NotifyWritableDirectory(DetectionDirType detection, std::wstring& dirPath);
-        virtual void NotifyWritableFile(DetectionFileType detection, std::wstring& filePath);
+        void NotifyWritableDirectory(DetectionDirType detection, std::wstring& dirPath) override;
+        void NotifyWritableFile(DetectionFileType detection, std::wstring& filePath) override;
     };
 
 // =================
@@ -154,8 +167,8 @@ namespace Commands
         ScanAutorun();
         virtual ~ScanAutorun() {}
 
-        virtual void LoadArgs(Utils::Arguments& args);
-        virtual void Perform();
+        void LoadArgs(Utils::Arguments& args) override;
+        void Perform() override;
     };
 
 // =================
@@ -168,8 +181,8 @@ namespace Commands
         ScanTask();
         virtual ~ScanTask() {}
 
-        virtual void LoadArgs(Utils::Arguments& args);
-        virtual void Perform();
+        void LoadArgs(Utils::Arguments& args) override;
+        void Perform() override;
     };
 
 // =================
@@ -184,8 +197,8 @@ namespace Commands
         ScanTasks();
         virtual ~ScanTasks() {}
 
-        virtual void LoadArgs(Utils::Arguments& args);
-        virtual void Perform();
+        void LoadArgs(Utils::Arguments& args) override;
+        void Perform() override;
     };
 
 // =================
@@ -198,8 +211,8 @@ namespace Commands
         ScanService();
         virtual ~ScanService() {}
 
-        virtual void LoadArgs(Utils::Arguments& args);
-        virtual void Perform();
+        void LoadArgs(Utils::Arguments& args) override;
+        void Perform() override;
     };
 
 // =================
@@ -214,8 +227,8 @@ namespace Commands
         ScanServices();
         virtual ~ScanServices() {}
 
-        virtual void LoadArgs(Utils::Arguments& args);
-        virtual void Perform();
+        void LoadArgs(Utils::Arguments& args) override;
+        void Perform() override;
     };
 
 // =================
@@ -228,8 +241,8 @@ namespace Commands
         ScanSystem();
         virtual ~ScanSystem() {}
 
-        virtual void LoadArgs(Utils::Arguments& args);
-        virtual void Perform();
+        void LoadArgs(Utils::Arguments& args) override;
+        void Perform() override;
     };
 
 // =================
@@ -242,7 +255,7 @@ namespace Commands
         MakeDll();
         virtual ~MakeDll() {}
 
-        virtual void LoadArgs(Utils::Arguments& args);
-        virtual void Perform();
+        void LoadArgs(Utils::Arguments& args) override;
+        void Perform() override;
     };
 };

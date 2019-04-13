@@ -152,13 +152,17 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Commands.cpp" />
+    <ClCompile Include="ImageScan.cpp" />
     <ClCompile Include="Hijacken.cpp" />
+    <ClCompile Include="PEParser.cpp" />
     <ClCompile Include="ProcessScan.cpp" />
     <ClCompile Include="Utils.cpp" />
     <ClCompile Include="System.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Commands.h" />
+    <ClInclude Include="ImageScan.h" />
+    <ClInclude Include="PEParser.h" />
     <ClInclude Include="ProcessScan.h" />
     <ClInclude Include="Utils.h" />
     <ClInclude Include="System.h" />

@@ -187,7 +187,7 @@ namespace Commands
         std::wstring option;
 
         if (!args.Probe(option))
-            return;
+            throw Utils::Exception(L"Not enough arguments");
 
         if (option == L"/nounwinding")
         {
@@ -195,7 +195,7 @@ namespace Commands
 
             args.SwitchToNext();
             if (!args.Probe(option))
-                return;
+                throw Utils::Exception(L"Not enough arguments");
         }
 
         if (option == L"/nodelay")
@@ -204,20 +204,71 @@ namespace Commands
 
             args.SwitchToNext();
             if (!args.Probe(option))
-                return;
+                throw Utils::Exception(L"Not enough arguments");
         }
 
         if (option == L"/accessible")
         {
-            _checkAccess = false;
+            _checkAccess = true;
 
             args.SwitchToNext();
             ImpersonationOptions::LoadArgs(args);
         }
+
+        if (!args.GetNext(_filePath))
+            throw Utils::Exception(L"Not enough arguments");
     }
 
     void ScanFile::Perform()
     {
+        auto token = ImpersonationOptions::CraftToken();
+        System::TokenAccessChecker access(*token);
+
+        Engine::ImageScanEngine::SetOptionUnwindImport(_unwindImports);
+        Engine::ImageScanEngine::SetOptionUnwindDelayLoadImport(_scanDelayLoad);
+        Engine::ImageScanEngine::SetOptionAccessibleOnly(_checkAccess);
+
+        Engine::ImageScanEngine::Scan(_filePath, access);
+    }
+
+    void ScanFile::NotifyLoadImageOrder(Engine::LoadImageOrder& dirs)
+    {
+        std::wcout << L"Image load order:" << std::endl;
+
+        int i = 0;
+        for (auto& dir : dirs.GetOrder())
+        {
+            std::wcout << L" " << ++i << L". [" << ConvertImageDirTypeToString(dir.GetType()) << "] " << dir.GetPath().c_str() << std::endl;
+        }
+    }
+
+    void ScanFile::NotifyVulnerableDll(Engine::ImageDirectory& dir, std::wstring dll)
+    {
+
+    }
+
+    const wchar_t* ScanFile::ConvertImageDirTypeToString(Engine::ImageDirectory::Type type)
+    {
+        switch (type)
+        {
+        case Engine::ImageDirectory::Type::Image:
+            return L"Image";
+        case Engine::ImageDirectory::Type::System32:
+            return L"System32";
+        case Engine::ImageDirectory::Type::System:
+            return L"System";
+        case Engine::ImageDirectory::Type::Windows:
+            return L"Windows";
+        case Engine::ImageDirectory::Type::Current:
+            return L"Current";
+        case Engine::ImageDirectory::Type::Environment:
+            return L"Environment";
+        case Engine::ImageDirectory::Type::FullPath:
+            return L"FullPath";
+        default:
+            break;
+        }
+        return L"Unknown";
     }
 
 // =================
@@ -303,7 +354,7 @@ namespace Commands
         if (token.GetIntegrityLevel() < System::IntegrityLevel::High)
             std::wcout << std::endl
                        << L" Warning! Hijacken has been run without administrator rights." << std::endl
-                       << L" Therefore scan is limited to accessible scope of processes." << std::endl
+                       << L" Therefore scan is limited to an accessible scope of processes." << std::endl
                        << std::endl;
     }
 
@@ -350,14 +401,14 @@ namespace Commands
 
                     for (auto& detection : _detectedDirs)
                     {
-                        std::wcout << L"  " << ConvertDirDetectionToString(detection.first) << L":" << std::endl;
+                        std::wcout << L"  " << Engine::ProcessScanEngine::ConvertDirDetectionToString(detection.first) << L":" << std::endl;
                         for (auto& dir : detection.second)
                             std::wcout << L"    " << dir.c_str() << std::endl;
                     }
 
                     for (auto& detection : _detectedFiles)
                     {
-                        std::wcout << L"  " << ConvertFileDetectionToString(detection.first) << L":" << std::endl;
+                        std::wcout << L"  " << Engine::ProcessScanEngine::ConvertFileDetectionToString(detection.first) << L":" << std::endl;
                         for (auto& file : detection.second)
                             std::wcout << L"    " << file.c_str() << std::endl;
                     }

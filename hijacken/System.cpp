@@ -770,6 +770,68 @@ namespace System
 
 // =================
 
+    ImageMapping::ImageMapping(const wchar_t* path) : _mappingSize(0)
+    {
+        File file(path, GENERIC_READ);
+        
+        Handle::SetHandle(
+            ::CreateFileMappingW(
+                file.GetNativeHandle(),
+                NULL,
+                PAGE_READONLY | SEC_IMAGE,
+                0,
+                0,
+                NULL
+            )
+        );
+        if (!Handle::IsValid())
+            throw Utils::Exception(::GetLastError(), L"CreateFileMappingW(image) failed with code %d", ::GetLastError());
+
+        _mapping = ::MapViewOfFile(Handle::GetNativeHandle(), FILE_MAP_READ, 0, 0, 0);
+        if (!_mapping)
+            throw Utils::Exception(::GetLastError(), L"MapViewOfFile(image) failed with code %d", ::GetLastError());
+    }
+
+    ImageMapping::~ImageMapping()
+    {
+        ::UnmapViewOfFile(_mapping);
+    }
+
+    void* ImageMapping::GetAddress()
+    {
+        return _mapping;
+    }
+
+    size_t ImageMapping::GetSize()
+    {
+        if (_mappingSize)
+            return _mappingSize;
+
+        MEMORY_BASIC_INFORMATION info;
+        if (!::VirtualQuery(_mapping, &info, sizeof(info)))
+            throw Utils::Exception(::GetLastError(), L"VirtualQuery() failed with code %d", ::GetLastError());
+
+        auto   regionBase = info.AllocationBase;
+        size_t regionSize = 0;
+        void*  regionPtr = nullptr;
+        do
+        {
+            if (regionBase != info.AllocationBase)
+                break;
+
+            regionSize += info.RegionSize;
+            regionPtr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize);
+        }
+        while (::VirtualQuery(regionPtr, &info, sizeof(info)));
+
+        if (::GetLastError() != ERROR_SUCCESS)
+            throw Utils::Exception(::GetLastError(), L"VirtualQuery() failed with code %d", ::GetLastError());
+
+        return _mappingSize = regionSize;
+    }
+
+// =================
+
     Directory::Directory(const wchar_t* path, DWORD access, DWORD share) :
         Handle(::CreateFileW(path, access, share, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL))
     {
@@ -777,4 +839,43 @@ namespace System
             throw Utils::Exception(::GetLastError(), L"CreateFileW(dir) failed with code %d", ::GetLastError());
     }
 
+    bool Directory::IsDirectory(const wchar_t* path)
+    {
+        DWORD attribs = ::GetFileAttributesW(path);
+        return (attribs & FILE_ATTRIBUTE_DIRECTORY);
+    }
+
+    // =================
+
+    std::wstring SystemInformation::GetSystem32Dir()
+    {
+        wchar_t buffer[MAX_PATH];
+
+        if (!::GetSystemDirectoryW(buffer, _countof(buffer)))
+            throw Utils::Exception(::GetLastError(), L"GetSystemDirectoryW() failed with code %d", ::GetLastError());
+
+        return buffer;
+    }
+
+    std::wstring SystemInformation::GetSystemDir()
+    {
+        wchar_t buffer[MAX_PATH];
+
+        if (!::GetWindowsDirectoryW(buffer, _countof(buffer)))
+            throw Utils::Exception(::GetLastError(), L"GetCurrentDirectoryW() failed with code %d", ::GetLastError());
+
+        wcscat_s(buffer, L"\\System");
+
+        return buffer;
+    }
+
+    std::wstring SystemInformation::GetWindowsDir()
+    {
+        wchar_t buffer[MAX_PATH];
+
+        if (!::GetWindowsDirectoryW(buffer, _countof(buffer)))
+            throw Utils::Exception(::GetLastError(), L"GetCurrentDirectoryW() failed with code %d", ::GetLastError());
+
+        return buffer;
+    }
 };

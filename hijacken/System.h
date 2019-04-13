@@ -249,11 +249,37 @@ namespace System
         File(const wchar_t* path, DWORD access = READ_CONTROL, DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
     };
 
+    class ImageMapping : public Handle
+    {
+    private:
+        void*  _mapping;
+        size_t _mappingSize;
+
+    public:
+        ImageMapping(const wchar_t* path);
+        ~ImageMapping();
+
+        void* GetAddress();
+        size_t GetSize();
+    };
+
 // =================
 
     class Directory : public Handle
     {
     public:
         Directory(const wchar_t* path, DWORD access = READ_CONTROL, DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+
+        static bool IsDirectory(const wchar_t* path);
+    };
+
+    // =================
+
+    class SystemInformation
+    {
+    public:
+        static std::wstring GetSystem32Dir();
+        static std::wstring GetSystemDir();
+        static std::wstring GetWindowsDir();
     };
 };

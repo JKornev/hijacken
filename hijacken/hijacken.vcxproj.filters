@@ -6,11 +6,15 @@
     <ClCompile Include="Commands.cpp" />
     <ClCompile Include="System.cpp" />
     <ClCompile Include="ProcessScan.cpp" />
+    <ClCompile Include="PEParser.cpp" />
+    <ClCompile Include="ImageScan.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Utils.h" />
     <ClInclude Include="Commands.h" />
     <ClInclude Include="System.h" />
     <ClInclude Include="ProcessScan.h" />
+    <ClInclude Include="PEParser.h" />
+    <ClInclude Include="ImageScan.h" />
   </ItemGroup>
 </Project>
