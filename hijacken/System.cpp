@@ -7,7 +7,7 @@
 
 namespace System
 {
-// =================
+    // =================
 
     Handle::Handle() :
         std::shared_ptr<void>(0, &ObjectDeleter)
@@ -41,7 +41,7 @@ namespace System
         reset(object, destroyer);
     }
 
-// =================
+    // =================
 
     Process::Process(DWORD processId, DWORD access) :
         Handle(::OpenProcess(access, FALSE, processId)),
@@ -130,7 +130,7 @@ namespace System
     {
     }
 
-// =================
+    // =================
 
     ProcessesSnapshot::ProcessesSnapshot() :
         Handle(::CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0))
@@ -175,7 +175,7 @@ namespace System
         _fromStart = true;
     }
 
-// =================
+    // =================
 
     ModulesSnapshot::ModulesSnapshot(DWORD processId) :
         Handle(::CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, processId))
@@ -236,7 +236,7 @@ namespace System
         _fromStart = true;
     }
 
-// =================
+    // =================
 
     ProcessInformation::ProcessInformation(DWORD processId) : _pebAddress(nullptr)
     {
@@ -330,7 +330,7 @@ namespace System
         path = buffer;
     }
 
-// =================
+    // =================
 
     ProcessEnvironmentBlock::ProcessEnvironmentBlock(ProcessInformation& processInfo) : _peb(nullptr)
     {
@@ -377,7 +377,7 @@ namespace System
     }
 
 
-// =================
+    // =================
 
     ProcessEnvironment::ProcessEnvironment(std::wstring& environment)
     {
@@ -391,7 +391,7 @@ namespace System
             auto keyEnd = entry.find(L'=');
             if (keyEnd != 0 && keyEnd < entry.size())
                 _variables[std::wstring(&entry[0], &entry[keyEnd])] = std::wstring(&entry[keyEnd + 1], &entry[entry.size()]);
-    
+
             startOffset = endOffset + 1;
             endOffset = environment.find(L'\0', startOffset);
         }
@@ -408,7 +408,7 @@ namespace System
         return true;
     }
 
-// =================
+    // =================
 
     void TokenBase::SetPrivilege(wchar_t* privelege, bool enable)
     {
@@ -635,7 +635,7 @@ namespace System
         return sid;
     }
 
-// =================
+    // =================
 
     PrimaryToken::PrimaryToken(Process& source, DWORD access, bool duplicate)
     {
@@ -666,7 +666,7 @@ namespace System
         Handle::SetHandle(token);
     }
 
-// =================
+    // =================
 
     ImpersonateToken::ImpersonateToken(Process& source, DWORD access)
     {
@@ -694,7 +694,7 @@ namespace System
         Handle::SetHandle(token);
     }
 
-// =================
+    // =================
 
     SecurityDescriptor::SecurityDescriptor(Handle& file) : 
         _descriptor(nullptr), 
@@ -724,7 +724,7 @@ namespace System
         return _descriptor;
     }
 
-// =================
+    // =================
 
     TokenAccessChecker::TokenAccessChecker(Process& process) :
         _token(process, TOKEN_DUPLICATE | TOKEN_QUERY)
@@ -759,7 +759,7 @@ namespace System
         return (accessStatus != FALSE);
     }
 
-// =================
+    // =================
 
     File::File(const wchar_t* path, DWORD access, DWORD share) :
         Handle(::CreateFileW(path, access, share, NULL, OPEN_EXISTING, 0, NULL))
@@ -768,7 +768,7 @@ namespace System
             throw Utils::Exception(::GetLastError(), L"CreateFileW(file) failed with code %d", ::GetLastError());
     }
 
-// =================
+    // =================
 
     ImageMapping::ImageMapping(const wchar_t* path) : _mappingSize(0)
     {
@@ -830,7 +830,7 @@ namespace System
         return _mappingSize = regionSize;
     }
 
-// =================
+    // =================
 
     Directory::Directory(const wchar_t* path, DWORD access, DWORD share) :
         Handle(::CreateFileW(path, access, share, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL))
@@ -842,7 +842,7 @@ namespace System
     bool Directory::IsDirectory(const wchar_t* path)
     {
         DWORD attribs = ::GetFileAttributesW(path);
-        return (attribs & FILE_ATTRIBUTE_DIRECTORY);
+        return (attribs & FILE_ATTRIBUTE_DIRECTORY ? true : false);
     }
 
     // =================
@@ -878,4 +878,138 @@ namespace System
 
         return buffer;
     }
+
+    // =================
+
+    RegistryKey::RegistryKey(BaseKeys base, const wchar_t* key, DWORD access) : _hkey(0)
+    {
+        auto result = ::RegOpenKeyExW(ConvertBaseToHKEY(base), key, 0, access, &_hkey);
+        if (result != ERROR_SUCCESS)
+            throw Utils::Exception(result, L"RegOpenKeyExW() failed with code %d", result);
+    }
+
+    RegistryKey::~RegistryKey()
+    {
+        ::RegCloseKey(_hkey);
+    }
+
+    HKEY RegistryKey::GetNativeHKEY()
+    {
+        return _hkey;
+    }
+
+    HKEY RegistryKey::ConvertBaseToHKEY(BaseKeys base)
+    {
+        switch (base)
+        {
+        case BaseKeys::Root:
+            return HKEY_CLASSES_ROOT;
+        case BaseKeys::CurrentConfig:
+            return HKEY_CURRENT_CONFIG;
+        case BaseKeys::CurrentUser:
+            return HKEY_CURRENT_USER;
+        case BaseKeys::LocalMachine:
+            return HKEY_LOCAL_MACHINE;
+        default:
+            break;
+        }
+        throw Utils::Exception(L"Unknown base registry key");
+    }
+
+    // =================
+
+    RegistryValue::RegistryValue(RegistryKey& key, const wchar_t* value)
+    {
+        DWORD size = 0x400;
+
+        _value.resize(size / sizeof(wchar_t));
+        
+        while (true) //TODO: max amount of attempts
+        {
+            auto result = ::RegQueryValueExW(
+                key.GetNativeHKEY(), 
+                value, 
+                NULL, 
+                &_type, 
+                reinterpret_cast<LPBYTE>(
+                    const_cast<wchar_t*>(_value.c_str())
+                ), 
+                &size
+            );
+            if (result == ERROR_MORE_DATA)
+            {
+                _value.resize(_value.size() + 0x100);
+                continue;
+            }
+            else if (result != ERROR_SUCCESS)
+            {
+                throw Utils::Exception(result, L"RegQueryValueExW failed with code %d", result);
+            }
+
+            size_t charsSize = size / sizeof(wchar_t);
+            charsSize += (size % 2 ? 1 : 0);
+            _value.resize(charsSize);
+            break;
+        }
+    }
+
+    DWORD RegistryValue::GetType() const
+    {
+        return _type;
+    }
+
+    const std::wstring& RegistryValue::GetValue() const
+    {
+        return _value;
+    }
+
+    // =================
+
+    EnumRegistryValues::EnumRegistryValues(BaseKeys base, const wchar_t* key)
+    {
+        RegistryKey hkey(base, key);
+        std::wstring name;
+
+        DWORD index = 0;
+        while (true)
+        {
+            name.resize(0x100);
+
+            DWORD nameSize = name.size(), nameType;
+            auto result = ::RegEnumValueW(
+                hkey.GetNativeHKEY(), 
+                index,
+                const_cast<wchar_t*>(name.c_str()), 
+                &nameSize, 
+                NULL, 
+                &nameType, 
+                NULL, 
+                NULL
+            );
+            if (result == ERROR_MORE_DATA)
+            {
+                name.resize(name.size() + 0x100);
+                continue;
+            }
+            else if (result == ERROR_NO_MORE_ITEMS)
+            {
+                break;
+            }
+            else if (result != ERROR_SUCCESS)
+            {
+                throw Utils::Exception(result, L"RegEnumValueW failed with code %d", result);
+            }
+
+            name.resize(wcslen(name.c_str()));
+            //_values[name] = RegistryValue(hkey, name.c_str());
+            _values.emplace(name, RegistryValue(hkey, name.c_str()));
+            index++;
+        }
+    }
+
+    const RegistryValues EnumRegistryValues::GetValues()
+    {
+        return _values;
+    }
+
 };

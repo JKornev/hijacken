@@ -83,7 +83,7 @@ namespace Commands
 
     protected:
         void NotifyLoadImageOrder(Engine::LoadImageOrder& dirs) override;
-        void NotifyVulnerableDll(Engine::ImageDirectory& dir, std::wstring dll) override;
+        void NotifyVulnerableDll(Engine::ImageDirectory& dir, std::wstring& dll, bool writtable) override;
 
     public:
         static const wchar_t* ConvertImageDirTypeToString(Engine::ImageDirectory::Type type);

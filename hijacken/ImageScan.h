@@ -3,6 +3,7 @@
 #include "System.h"
 #include <vector>
 #include <set>
+#include <unordered_set>
 
 namespace Engine
 {
@@ -14,7 +15,7 @@ namespace Engine
 
         enum class Type
         {
-            Image,
+            Base,
             System32,
             System,
             Windows,
@@ -62,31 +63,12 @@ namespace Engine
         
         ImageScanOrder(std::wstring& imageDir, std::wstring& currentDir, System::TokenAccessChecker& access);
         
-        ImageDirectory FindDllDirectory(std::wstring& dllname, bool checkAccess);
+        ImageDirectory FindDllDirectory(std::wstring& dllname);
 
     private:
 
-        bool CheckDirectoryForDll(std::wstring& dllname, ImageDirectory& dir, bool checkAccess);
         bool DirContainsDll(std::wstring& dllname, ImageDirectory& dir);
         
-    };
-
-    // =================
-
-    class KnownDll
-    {
-
-    };
-
-    class KnownDlls
-    {
-    private:
-        //std::map<std::wstring, DllSet> _known;
-
-    public:
-        KnownDlls();
-
-        bool Contain(std::wstring& dllName);
     };
 
     // =================
@@ -94,9 +76,39 @@ namespace Engine
     class DllCache
     {
     private:
-        std::set<std::wstring> _dlls;
+        std::unordered_set<std::wstring> _dlls;
     public:
-        bool InsertOnlyNew(std::wstring& dllName);
+        bool InsertOnlyNew(const std::wstring& dllName);
+        bool Contain(const std::wstring& dllName);
+
+        std::unordered_set<std::wstring>& GetContainer();
+    };
+
+    // =================
+
+    /*class KnownDll
+    {
+    public:
+        KnownDll(std::wstring& dllName);
+    };*/
+
+    class KnownDlls
+    {
+    private:
+        std::map<std::wstring, DllCache> _known;
+        DllCache _active;
+
+    public:
+        KnownDlls();
+
+        bool Contain(std::wstring& dllName, DllCache& loadedDlls);
+
+        void ActivateKnownDependencyIfKnown(std::wstring& dllName);
+
+    private:
+
+        //TODO;
+        void UnwindImports(const std::wstring& dllName, const DllCache& cache);
     };
 
     // =================
@@ -114,8 +126,6 @@ namespace Engine
 
     public:
 
-        ImageScanEngine();
-
         void SetOptionUnwindImport(bool enable);
         void SetOptionUnwindDelayLoadImport(bool enable);
         void SetOptionAccessibleOnly(bool enable);
@@ -124,14 +134,16 @@ namespace Engine
 
     private:
 
-        void ScanModule(std::wstring& dllName, ImageScanOrder& order, DllCache& scannedDlls);
+        void ScanModule(std::wstring& dllName, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access);
 
-        void ScanImports(std::wstring& dllPath, ImageScanOrder& order, DllCache& scannedDlls);
+        void ScanImports(std::wstring& dllPath, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access);
+
+        static bool IsFileWritable(std::wstring path, System::TokenAccessChecker& access);
 
     protected:
 
         virtual void NotifyLoadImageOrder(LoadImageOrder& dir);
-        virtual void NotifyVulnerableDll(ImageDirectory& dir, std::wstring dll);
+        virtual void NotifyVulnerableDll(ImageDirectory& dir, std::wstring& dll, bool writtable);
 
     };
 };

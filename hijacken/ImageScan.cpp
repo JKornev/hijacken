@@ -1,6 +1,7 @@
 #include "ImageScan.h"
 #include "PEParser.h"
 #include <iostream>
+#include <algorithm>
 
 namespace Engine
 {
@@ -46,7 +47,7 @@ namespace Engine
     {
         _dirs.push_back(
             ImageDirectory(
-                ImageDirectory::Type::Image,
+                ImageDirectory::Type::Base,
                 imageDir, 
                 access
             )
@@ -101,26 +102,15 @@ namespace Engine
     {
     }
 
-    ImageDirectory ImageScanOrder::FindDllDirectory(std::wstring& dllname, bool checkAccess)
+    ImageDirectory ImageScanOrder::FindDllDirectory(std::wstring& dllname)
     {
         auto dirs = LoadImageOrder::GetOrder();
 
         for (auto& dir : dirs)
-            if (CheckDirectoryForDll(dllname, dir, checkAccess))
+            if (DirContainsDll(dllname, dir))
                 return dir;
 
         return ImageDirectory();
-    }
-
-    bool ImageScanOrder::CheckDirectoryForDll(std::wstring& dllname, ImageDirectory& dir, bool checkAccess)
-    {
-        if (checkAccess && !dir.IsAccessible())
-            return false;
-
-        if (!DirContainsDll(dllname, dir))
-            return false;
-        
-        return true;
     }
 
     bool ImageScanOrder::DirContainsDll(std::wstring& dllname, ImageDirectory& dir)
@@ -143,26 +133,82 @@ namespace Engine
 
     KnownDlls::KnownDlls()
     {
+        System::EnumRegistryValues knowndlls(System::BaseKeys::LocalMachine, L"System\\CurrentControlSet\\Control\\Session Manager\\KnownDLLs");
+        auto& values = knowndlls.GetValues();
+
+        //TODO: load L"System\\CurrentControlSet\\Control\\Session Manager", L"ExcludeFromKnownDlls" MULTISTR
+        //      and check it in the following cycle
+
+        auto loadPredefined = [&](const std::wstring dll)
+        {
+            _known.emplace(dll, DllCache());
+            UnwindImports(dll, _known[dll]);
+        };
+
+        loadPredefined(L"ntdll.dll");
+        loadPredefined(L"kernel32.dll");
+        loadPredefined(L"kernelbase.dll");
+
+        for (auto& value : values)
+        {
+            if (value.first == L"DllDirectory" || value.first == L"DllDirectory32")
+                continue;
+
+            if (value.second.GetType() != REG_SZ)
+                continue;
+
+            DllCache cache;
+            auto dllName = std::wstring(value.second.GetValue().c_str());
+            std::transform(dllName.begin(), dllName.end(), dllName.begin(), towlower);
+            if (_known.find(dllName) == _known.end())
+            {
+                _known[dllName] = DllCache();
+                UnwindImports(dllName, _known[dllName]);
+                ActivateKnownDependencyIfKnown(dllName);//TODO: delete me
+            }
+        }
     }
 
-    bool KnownDlls::Contain(std::wstring& dllName)
+    bool KnownDlls::Contain(std::wstring& dllName, DllCache& loadedDlls)
     {
-        //TODO:
-        return false;
+        return _active.Contain(dllName);
+    }
+
+    void KnownDlls::ActivateKnownDependencyIfKnown(std::wstring& dllName)
+    {
+        auto known = _known.find(dllName);
+        if (known == _known.end())
+            return;
+
+        _active.InsertOnlyNew((*known).first);
+
+        for (const auto& dll : (*known).second.GetContainer())
+            _active.InsertOnlyNew(dll);
+    }
+
+    void KnownDlls::UnwindImports(const std::wstring& dllName, const DllCache& cache)
+    {
+        //TOTHINK: x64 and x86 binaries can have different known dlls
     }
 
     // =================
 
-    bool DllCache::InsertOnlyNew(std::wstring& dllName)
+    bool DllCache::InsertOnlyNew(const std::wstring& dllName)
     {
         return _dlls.insert(dllName).second;
     }
 
-    // =================
-
-    ImageScanEngine::ImageScanEngine()
+    bool DllCache::Contain(const std::wstring& dllName)
     {
+        return (_dlls.find(dllName) != _dlls.end());
     }
+
+    std::unordered_set<std::wstring>& DllCache::GetContainer()
+    {
+        return _dlls;
+    }
+
+    // =================
 
     void ImageScanEngine::SetOptionUnwindImport(bool enable)
     {
@@ -191,36 +237,39 @@ namespace Engine
         NotifyLoadImageOrder(order);
 
         // Scan initial import table
-        ScanImports(imagePath, order, scannedDlls);
+        ScanImports(imagePath, order, scannedDlls, access);
     }
 
-    void ImageScanEngine::ScanModule(std::wstring& dllName, ImageScanOrder& order, DllCache& scannedDlls)
+    void ImageScanEngine::ScanModule(std::wstring& dllName, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access)
     {
         try
         {
+            std::transform(dllName.begin(), dllName.end(), dllName.begin(), towlower);
+
             if (!scannedDlls.InsertOnlyNew(dllName))
                 return;
 
-            if (_knownDlls.Contain(dllName))
+            _knownDlls.ActivateKnownDependencyIfKnown(dllName);
+
+            if (_knownDlls.Contain(dllName, _scannedDlls))
                 return;
 
-            auto dir = order.FindDllDirectory(dllName, _checkAccessible);
+            auto dir = order.FindDllDirectory(dllName);
+            auto dllPath = dir.GetPath();
+            dllPath += L"\\";
+            dllPath += dllName;
 
-            if (dir.GetType() == ImageDirectory::Type::Unknown)
-                return;
-            
-            if (dir.GetType() == ImageDirectory::Type::Image)
-                return;
+            bool writtable = false;
+            if (_checkAccessible && IsFileWritable(dllPath, access))
+                writtable = true;
 
-            std::wcout << L"Found: " << dllName.c_str() << L" " << (int)dir.GetType() << std::endl;
-            if (_unwindImports)
-            {
-                std::wstring path = dir.GetPath();
-                path += L"\\";
-                path += dllName;
+            if (dir.GetType() != ImageDirectory::Type::Base)
+                NotifyVulnerableDll(dir, dllName, writtable);
+            else if (dir.GetType() == ImageDirectory::Type::Base && writtable)
+                NotifyVulnerableDll(dir, dllName, true);
 
-                ScanImports(path, order, scannedDlls);
-            }
+            if (_unwindImports && dir.GetType() != ImageDirectory::Type::Unknown)
+                ScanImports(dllPath, order, scannedDlls, access);
         }
         catch (Utils::Exception& e)
         {
@@ -228,21 +277,31 @@ namespace Engine
         }
     }
 
-    void ImageScanEngine::ScanImports(std::wstring& dllPath, ImageScanOrder& order, DllCache& scannedDlls)
+    void ImageScanEngine::ScanImports(std::wstring& dllPath, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access)
     {
         System::ImageMapping mapping(dllPath.c_str());
         PEParser::ImageFactory factory;
         auto image = factory.GetImage(mapping);
         auto imports = image->LoadImportTable();
         for (auto& import : imports)
-            ScanModule(std::wstring(import.begin(), import.end()), order, scannedDlls);
+            ScanModule(std::wstring(import.begin(), import.end()), order, scannedDlls, access);
     }
 
     void ImageScanEngine::NotifyLoadImageOrder(LoadImageOrder& dir)
     {
+        // Stub
     }
 
-    void ImageScanEngine::NotifyVulnerableDll(ImageDirectory& dir, std::wstring dll)
+    void ImageScanEngine::NotifyVulnerableDll(ImageDirectory& dir, std::wstring& dll, bool writtable)
     {
+        // Stub
     }
+
+    bool ImageScanEngine::IsFileWritable(std::wstring path, System::TokenAccessChecker& access)
+    {
+        System::File file(path.c_str());
+        System::SecurityDescriptor descriptor(file);
+        return access.IsFileObjectAccessible(descriptor, FILE_WRITE_DATA);
+    }
+
 };

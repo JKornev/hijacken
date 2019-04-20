@@ -273,7 +273,7 @@ namespace System
         static bool IsDirectory(const wchar_t* path);
     };
 
-    // =================
+// =================
 
     class SystemInformation
     {
@@ -282,4 +282,56 @@ namespace System
         static std::wstring GetSystemDir();
         static std::wstring GetWindowsDir();
     };
+
+// =================
+
+    enum class BaseKeys
+    {
+        Root,
+        CurrentConfig,
+        CurrentUser,
+        LocalMachine
+    };
+
+    class RegistryKey
+    {
+    private:
+        HKEY _hkey;
+
+    public:
+        RegistryKey(BaseKeys base, const wchar_t* key, DWORD access = KEY_QUERY_VALUE);
+        ~RegistryKey();
+
+        HKEY GetNativeHKEY();
+
+    private:
+        HKEY ConvertBaseToHKEY(BaseKeys base);
+    };
+
+    class RegistryValue
+    {
+    private:
+        DWORD        _type;
+        std::wstring _value;
+
+    public:
+        RegistryValue(RegistryKey& key, const wchar_t* value);
+
+        DWORD GetType() const;
+        const std::wstring& GetValue() const;
+    };
+
+    typedef std::map<std::wstring, RegistryValue> RegistryValues;
+
+    class EnumRegistryValues
+    {
+    private:
+        RegistryValues _values;
+
+    public:
+        EnumRegistryValues(BaseKeys base, const wchar_t* key);
+
+        const RegistryValues GetValues();
+    };
+
 };

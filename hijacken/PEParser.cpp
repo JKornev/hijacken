@@ -128,7 +128,7 @@ namespace PEParser
             region.rawSize       = sections[i].SizeOfRawData;
             region.virtualOffset = sections[i].VirtualAddress;
             region.virtualSize   = sections[i].Misc.VirtualSize;
-            _sections.emplace_back(region);
+            _sections.push_back(region);
         }
     }
 

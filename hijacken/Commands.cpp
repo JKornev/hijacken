@@ -242,17 +242,17 @@ namespace Commands
         }
     }
 
-    void ScanFile::NotifyVulnerableDll(Engine::ImageDirectory& dir, std::wstring dll)
+    void ScanFile::NotifyVulnerableDll(Engine::ImageDirectory& dir, std::wstring& dll, bool writtable)
     {
-
+        std::wcout << L" Dll: " << dll.c_str()  << (writtable ? L" writable" : L"") << std::endl;
     }
 
     const wchar_t* ScanFile::ConvertImageDirTypeToString(Engine::ImageDirectory::Type type)
     {
         switch (type)
         {
-        case Engine::ImageDirectory::Type::Image:
-            return L"Image";
+        case Engine::ImageDirectory::Type::Base:
+            return L"Base";
         case Engine::ImageDirectory::Type::System32:
             return L"System32";
         case Engine::ImageDirectory::Type::System:
