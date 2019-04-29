@@ -90,7 +90,7 @@ namespace Utils
 
 // =================
 
-    SeparatedStrings::SeparatedStrings(std::wstring& str, wchar_t seporator)
+    SeparatedStrings::SeparatedStrings(const std::wstring& str, wchar_t seporator)
     {
         size_t startOffset = 0;
         auto endOffset = str.find(seporator);
@@ -102,15 +102,6 @@ namespace Utils
             startOffset = endOffset + 1;
             endOffset = str.find(seporator, startOffset);
         }
-    }
-
-    void ExtractFileDirectory(std::wstring& path, std::wstring& directory)
-    {
-        auto index = path.rfind('\\');
-        if (index == std::wstring::npos)
-            directory.clear();
-        else
-            directory = path.substr(0, index);
     }
 
 };

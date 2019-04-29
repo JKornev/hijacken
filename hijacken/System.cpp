@@ -4,6 +4,9 @@
 #include <aclapi.h>
 #include <psapi.h>
 #include <sddl.h>
+#include <shlwapi.h>
+
+#pragma comment(lib, "shlwapi.lib")
 
 namespace System
 {
@@ -316,7 +319,7 @@ namespace System
     {
         std::wstring path;
         GetImagePath(path);
-        Utils::ExtractFileDirectory(path, directory);
+        System::FileUtils::ExtractFileDirectory(path, directory);
     }
 
     void ProcessInformation::GetModulePath(HMODULE module, std::wstring& path)
@@ -328,6 +331,11 @@ namespace System
             throw Utils::Exception(L"GetModuleFileNameExW(pid:%d) failed with code %d", _process->GetProcessID(), ::GetLastError());
 
         path = buffer;
+    }
+
+    Bitness ProcessInformation::GetCurrentProcessBitness()
+    {
+        return (sizeof(void*) == sizeof(long long) ? Bitness::Arch64 : Bitness::Arch32);
     }
 
     // =================
@@ -832,6 +840,55 @@ namespace System
 
     // =================
 
+    std::wstring FileUtils::BuildPath(const std::wstring& directory, const std::wstring& file)
+    {
+        std::wstring path = directory;
+        path += L"\\";
+        path += file;
+        return path;
+    }
+
+    void FileUtils::ExtractFileDirectory(const std::wstring& path, std::wstring& directory)
+    {
+        auto index = path.rfind('\\');
+        if (index == std::wstring::npos)
+            directory.clear();
+        else
+            directory = path.substr(0, index);
+    }
+
+    void FileUtils::NormalizePath(std::wstring& path)
+    {
+        std::vector<wchar_t> buffer;
+        buffer.resize(1/*MAX_PATH*/);
+        
+        for (int i = 0; i < 5; i++)
+        {
+            wchar_t* output;
+            auto length = ::GetFullPathNameW(path.c_str(), buffer.size(), &buffer[0], &output);
+            if (!length)
+            {
+                throw Utils::Exception(L"GetFullPathNameW() failed with code %d", ::GetLastError());
+            }
+            else if (length && output)
+            {
+                path = &buffer[0];
+                return;
+            }
+
+            buffer.resize(length + buffer.size());
+        }
+
+        throw Utils::Exception(L"Can't normalize path");
+    }
+
+    bool FileUtils::IsPathRelative(std::wstring& path)
+    {
+        return !!::PathIsRelativeW(path.c_str());
+    }
+
+    // =================
+
     Directory::Directory(const wchar_t* path, DWORD access, DWORD share) :
         Handle(::CreateFileW(path, access, share, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL))
     {
@@ -847,12 +904,48 @@ namespace System
 
     // =================
 
+    Bitness SystemInformation::GetSystemBitness()
+    {
+        SYSTEM_INFO info;
+        ::GetNativeSystemInfo(&info);
+
+        Bitness bitness;
+        switch (info.wProcessorArchitecture)
+        {
+        case PROCESSOR_ARCHITECTURE_AMD64:
+        case 12/*PROCESSOR_ARCHITECTURE_ARM64*/:
+        case PROCESSOR_ARCHITECTURE_IA64:
+            bitness = Bitness::Arch64;
+            break;
+        case PROCESSOR_ARCHITECTURE_INTEL:
+        case PROCESSOR_ARCHITECTURE_ARM:
+            bitness = Bitness::Arch32;
+            break;
+        default:
+            throw Utils::Exception(L"Unknown architecture %d", info.wProcessorArchitecture);
+        }
+
+        return bitness;
+    }
+
     std::wstring SystemInformation::GetSystem32Dir()
     {
         wchar_t buffer[MAX_PATH];
 
         if (!::GetSystemDirectoryW(buffer, _countof(buffer)))
             throw Utils::Exception(::GetLastError(), L"GetSystemDirectoryW() failed with code %d", ::GetLastError());
+
+        return buffer;
+    }
+
+    std::wstring SystemInformation::GetSysWow64Dir()
+    {
+        wchar_t buffer[MAX_PATH];
+
+        if (!::GetWindowsDirectoryW(buffer, _countof(buffer)))
+            throw Utils::Exception(::GetLastError(), L"GetCurrentDirectoryW() failed with code %d", ::GetLastError());
+
+        wcscat_s(buffer, L"\\SysWOW64");
 
         return buffer;
     }
@@ -881,6 +974,31 @@ namespace System
 
     // =================
 
+    Wow64NoFsRedirection::Wow64NoFsRedirection() : _revert(false)
+    {
+        if (SystemInformation::GetSystemBitness() != Bitness::Arch64)
+            return;
+
+        if (ProcessInformation::GetCurrentProcessBitness() == Bitness::Arch64)
+            return;
+
+        if (!::Wow64DisableWow64FsRedirection(&_old))
+            throw Utils::Exception(::GetLastError(), L"Wow64DisableWow64FsRedirection() failed with code %d", ::GetLastError());
+
+        _revert = true;
+    }
+
+    Wow64NoFsRedirection::~Wow64NoFsRedirection()
+    {
+        if (!_revert)
+            return;
+
+        if (!::Wow64RevertWow64FsRedirection(_old))
+            throw Utils::Exception(::GetLastError(), L"Wow64RevertWow64FsRedirection() failed with code %d", ::GetLastError());
+    }
+
+    // =================
+
     RegistryKey::RegistryKey(BaseKeys base, const wchar_t* key, DWORD access) : _hkey(0)
     {
         auto result = ::RegOpenKeyExW(ConvertBaseToHKEY(base), key, 0, access, &_hkey);
@@ -893,7 +1011,7 @@ namespace System
         ::RegCloseKey(_hkey);
     }
 
-    HKEY RegistryKey::GetNativeHKEY()
+    HKEY RegistryKey::GetNativeHKEY() const
     {
         return _hkey;
     }
@@ -918,7 +1036,7 @@ namespace System
 
     // =================
 
-    RegistryValue::RegistryValue(RegistryKey& key, const wchar_t* value)
+    RegistryValue::RegistryValue(const RegistryKey& key, const wchar_t* value)
     {
         DWORD size = 0x400;
 
@@ -961,6 +1079,160 @@ namespace System
     const std::wstring& RegistryValue::GetValue() const
     {
         return _value;
+    }
+
+    // =================
+
+    RegistryDwordValue::RegistryDwordValue(const RegistryValue& value)
+    {
+        LoadDword(value);
+    }
+
+    RegistryDwordValue::RegistryDwordValue(const RegistryKey& key, const wchar_t* value)
+    {
+        RegistryValue regValue(key, value);
+        LoadDword(regValue);
+    }
+
+    DWORD RegistryDwordValue::GetValue() const
+    {
+        return _value;
+    }
+
+    void RegistryDwordValue::LoadDword(const RegistryValue& value)
+    {
+        if (value.GetType() != REG_DWORD)
+            throw Utils::Exception(L"Not a multi-string value '%s'", value);
+
+        auto& data = value.GetValue();
+        if (data.size() < sizeof(DWORD))
+            throw Utils::Exception(L"Invalid DWORD data size %d", data.size());
+
+        _value = *reinterpret_cast<const DWORD*>(data.c_str());
+    }
+
+    // =================
+
+    RegistryMultiStringValue::RegistryMultiStringValue(const RegistryValue& value)
+    {
+        LoadStrings(value);
+    }
+
+    RegistryMultiStringValue::RegistryMultiStringValue(const RegistryKey& key, const wchar_t* value)
+    {
+        RegistryValue regValue(key, value);
+        LoadStrings(regValue);
+    }
+
+    void RegistryMultiStringValue::LoadStrings(const RegistryValue& value)
+    {
+        if (value.GetType() != REG_MULTI_SZ)
+            throw Utils::Exception(L"Not a multi-string value '%s'", value);
+
+        auto data = value.GetValue();
+        const wchar_t* string = data.c_str();
+        auto size = data.size();
+        for (size_t i = 0; i < size; i++)
+        {
+            if (string)
+            {
+                if (data[i] != L'\0')
+                    continue;
+
+                std::vector<std::wstring>::push_back(string);
+                string = nullptr;
+            }
+            else
+            {
+                if (data[i] == L'\0')
+                    continue;
+
+                string = &data[i];
+            }
+        }
+
+        if (string)
+            std::vector<std::wstring>::push_back(string);
+    }
+
+    // =================
+
+    RegistryStringValue::RegistryStringValue(const RegistryValue& value)
+    {
+        LoadRegString(value);
+    }
+
+    RegistryStringValue::RegistryStringValue(const RegistryKey& key, const wchar_t* value)
+    {
+        RegistryValue regValue(key, value);
+        LoadRegString(regValue);
+    }
+
+    const std::wstring& RegistryStringValue::GetValue() const
+    {
+        return _value;
+    }
+
+    void RegistryStringValue::LoadRegString(const RegistryValue& value)
+    {
+        if (value.GetType() != REG_SZ)
+            throw Utils::Exception(L"Not a multi-string value '%s'", value);
+
+        _value = value.GetValue();
+    }
+
+    // =================
+
+    RegistryExpandedStringValue::RegistryExpandedStringValue(const RegistryValue& value)
+    {
+        LoadRegString(value);
+    }
+
+    RegistryExpandedStringValue::RegistryExpandedStringValue(const RegistryKey& key, const wchar_t* value)
+    {
+        RegistryValue regValue(key, value);
+        LoadRegString(regValue);
+    }
+
+    const std::wstring& RegistryExpandedStringValue::GetValue() const
+    {
+        return _value;
+    }
+
+    void RegistryExpandedStringValue::LoadRegString(const RegistryValue& value)
+    {
+        if (value.GetType() != REG_EXPAND_SZ)
+            throw Utils::Exception(L"Not a multi-string value '%s'", value);
+
+        // ExpandEnvironmentStrings insted of PathUnExpandEnvStringsA
+        //_value = value.GetValue();
+
+        auto unexpanded = value.GetValue();
+        _value.resize(unexpanded.size() + 0x200);
+
+        for (int i = 0; i < 5; i++)
+        {
+            auto result = ::ExpandEnvironmentStringsW(
+                unexpanded.c_str(),
+                const_cast<wchar_t*>(_value.c_str()),
+                _value.size()
+            );
+            if (result)
+            {
+                _value.resize(result);
+                return;
+            }
+
+            if (::GetLastError() == ERROR_INSUFFICIENT_BUFFER)
+            {
+                _value.resize(_value.size() + 0x200);
+                continue;
+            }
+
+            throw Utils::Exception(L"Can't expand registry value, code: %d", ::GetLastError());
+        }
+
+        throw Utils::Exception(L"Can't expand registry value");
     }
 
     // =================

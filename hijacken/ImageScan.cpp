@@ -43,56 +43,120 @@ namespace Engine
 
     // =================
 
-    LoadImageOrder::LoadImageOrder(std::wstring& imageDir, std::wstring& currentDir, System::TokenAccessChecker& access)
+    LoadImageOrder::LoadImageOrder(std::wstring& imageDir, std::wstring& currentDir, System::TokenAccessChecker& access) : 
+        _wow64mode(false)
     {
-        _dirs.push_back(
-            ImageDirectory(
-                ImageDirectory::Type::Base,
-                imageDir, 
-                access
-            )
+        auto supportWow64 = (System::SystemInformation::GetSystemBitness() == System::Bitness::Arch64);
+        bool safeSearch = IsSafeSearchEnabled();
+
+        auto putDirectory = [&](ImageDirectory::Type type, std::wstring& dir)
+        {
+            _order.emplace_back(type, dir, access);
+            if (supportWow64)
+                _orderWow64.emplace_back(type, dir, access);
+        };
+
+        // Base image dir
+        putDirectory(ImageDirectory::Type::Base, imageDir);
+
+        // Current dir
+        if (!safeSearch)
+            putDirectory(ImageDirectory::Type::Current, imageDir);
+
+        // System32 and SysWOW64 dirs
+        _order.emplace_back(
+            ImageDirectory::Type::System32,
+            System::SystemInformation::GetSystem32Dir(),
+            access
         );
-
-        //TODO: SafeDllSerachMode???
-
-        _dirs.push_back(
-            ImageDirectory(
-                ImageDirectory::Type::System32, 
-                System::SystemInformation::GetSystem32Dir(),
+        if (supportWow64)
+            _orderWow64.emplace_back(
+                ImageDirectory::Type::System32,
+                System::SystemInformation::GetSysWow64Dir(),
                 access
-            )
-        );
+            );
 
-        _dirs.push_back(
-            ImageDirectory(
-                ImageDirectory::Type::System, 
-                System::SystemInformation::GetSystemDir(),
+        // System dir
+        putDirectory(ImageDirectory::Type::System, System::SystemInformation::GetSystemDir());
+
+        // Windows dir
+        putDirectory(ImageDirectory::Type::Windows, System::SystemInformation::GetWindowsDir());
+
+        // Current dir
+        if (safeSearch)
+            putDirectory(ImageDirectory::Type::Current, imageDir);
+
+        // Environment dirs
+        if (!LoadEnvironmentVariables(System::BaseKeys::CurrentUser, L"Environment", supportWow64, access))
+            LoadEnvironmentVariables(
+                System::BaseKeys::LocalMachine,
+                L"System\\CurrentControlSet\\Control\\Session Manager\\Environment",
+                supportWow64,
                 access
-            )
-        );
-
-        _dirs.push_back(
-            ImageDirectory(
-                ImageDirectory::Type::Windows, 
-                System::SystemInformation::GetWindowsDir(),
-                access
-            )
-        );
-
-        _dirs.push_back(
-            ImageDirectory(
-                ImageDirectory::Type::Current, 
-                currentDir,
-                access
-            )
-        );
-
-        //TODO: %PATH%
+            );
     }
 
-    const std::vector<ImageDirectory> LoadImageOrder::GetOrder()
+    void LoadImageOrder::SetWow64Mode(bool value)
     {
-        return _dirs;
+        _wow64mode = value;
+    }
+
+    const std::vector<ImageDirectory>& LoadImageOrder::GetOrder()
+    {
+        if (_wow64mode)
+            return _orderWow64;
+
+        return _order;
+    }
+
+    bool LoadImageOrder::IsSafeSearchEnabled()
+    {
+        //TODO: seems like when value isn't present than system think that SafeSearch is enabled,
+        //      needs to be clarified
+        bool enabled = true;
+
+        try
+        {
+            System::RegistryKey key(
+                System::BaseKeys::LocalMachine,
+                L"System\\CurrentControlSet\\Control\\Session Manager"
+            );
+            System::RegistryDwordValue value(key, L"SafeDllSearchMode");
+            enabled = (value.GetValue() != 0);
+        }
+        catch (...)
+        {
+        }
+
+        return enabled;
+    }
+
+    bool LoadImageOrder::LoadEnvironmentVariables(System::BaseKeys sourceBase, const wchar_t* sourceKey, bool wow64mode, System::TokenAccessChecker& access)
+    {
+        std::wstring rawPaths;
+
+        try
+        {
+            System::RegistryKey key(sourceBase, sourceKey);
+            System::RegistryExpandedStringValue pathValue(key, L"Path");
+            rawPaths = pathValue.GetValue();
+        }
+        catch (...)
+        {
+            return false;
+        }
+
+        Utils::SeparatedStrings paths(rawPaths, L';');
+
+        for (auto& dir : paths)
+        {
+            //TODO: remove a '\\' symbol in the end
+            _order.emplace_back(ImageDirectory::Type::Environment, dir, access);
+            if (wow64mode)
+                _orderWow64.emplace_back(ImageDirectory::Type::Environment, dir, access);
+        }
+
+        return true;
     }
 
     // =================
@@ -107,17 +171,18 @@ namespace Engine
         auto dirs = LoadImageOrder::GetOrder();
 
         for (auto& dir : dirs)
-            if (DirContainsDll(dllname, dir))
-                return dir;
+        if (DirContainsDll(dllname, dir))
+            return dir;
 
         return ImageDirectory();
     }
 
     bool ImageScanOrder::DirContainsDll(std::wstring& dllname, ImageDirectory& dir)
     {
-        std::wstring path = dir.GetPath();
-        path += L"\\";
-        path += dllname;
+        auto path = System::FileUtils::BuildPath(
+            dir.GetPath(),
+            dllname
+        );
 
         auto attribs = ::GetFileAttributesW(path.c_str());
         if (attribs == INVALID_FILE_ATTRIBUTES)
@@ -133,21 +198,32 @@ namespace Engine
 
     KnownDlls::KnownDlls()
     {
-        System::EnumRegistryValues knowndlls(System::BaseKeys::LocalMachine, L"System\\CurrentControlSet\\Control\\Session Manager\\KnownDLLs");
+        _supportWow64 = (System::SystemInformation::GetSystemBitness() == System::Bitness::Arch64);
+
+        System::EnumRegistryValues knowndlls(
+            System::BaseKeys::LocalMachine,
+            L"System\\CurrentControlSet\\Control\\Session Manager\\KnownDLLs"
+        );
         auto& values = knowndlls.GetValues();
 
-        //TODO: load L"System\\CurrentControlSet\\Control\\Session Manager", L"ExcludeFromKnownDlls" MULTISTR
-        //      and check it in the following cycle
+        LoadExcludedDlls();
 
-        auto loadPredefined = [&](const std::wstring dll)
+        auto loadKnownDll = [&](const std::wstring dll)
         {
-            _known.emplace(dll, DllCache());
-            UnwindImports(dll, _known[dll]);
+            if (_excluded.Contain(dll))
+                return;
+
+            if (_known.InsertOnlyNew(dll))
+                UnwindImports(dll, false);
+
+            if (_supportWow64 && _knownWow64.InsertOnlyNew(dll))
+                UnwindImports(dll, true);
         };
 
-        loadPredefined(L"ntdll.dll");
-        loadPredefined(L"kernel32.dll");
-        loadPredefined(L"kernelbase.dll");
+        //TODO: check is it possible to remove following libs from known list
+        loadKnownDll(L"ntdll.dll");
+        loadKnownDll(L"kernel32.dll");
+        loadKnownDll(L"kernelbase.dll");
 
         for (auto& value : values)
         {
@@ -157,38 +233,65 @@ namespace Engine
             if (value.second.GetType() != REG_SZ)
                 continue;
 
-            DllCache cache;
             auto dllName = std::wstring(value.second.GetValue().c_str());
             std::transform(dllName.begin(), dllName.end(), dllName.begin(), towlower);
-            if (_known.find(dllName) == _known.end())
-            {
-                _known[dllName] = DllCache();
-                UnwindImports(dllName, _known[dllName]);
-                ActivateKnownDependencyIfKnown(dllName);//TODO: delete me
-            }
+            loadKnownDll(dllName);
         }
     }
 
-    bool KnownDlls::Contain(std::wstring& dllName, DllCache& loadedDlls)
+    bool KnownDlls::Contain(std::wstring& dllName, System::Bitness bitness)
     {
-        return _active.Contain(dllName);
+        return _known.Contain(dllName);
     }
 
-    void KnownDlls::ActivateKnownDependencyIfKnown(std::wstring& dllName)
+    void KnownDlls::LoadExcludedDlls()
     {
-        auto known = _known.find(dllName);
-        if (known == _known.end())
-            return;
+        try
+        {
+            System::RegistryKey key(
+                System::BaseKeys::LocalMachine, 
+                L"System\\CurrentControlSet\\Control\\Session Manager"
+            );
+            System::RegistryMultiStringValue excludedList(key, L"ExcludeFromKnownDlls");
 
-        _active.InsertOnlyNew((*known).first);
-
-        for (const auto& dll : (*known).second.GetContainer())
-            _active.InsertOnlyNew(dll);
+            for (auto& dllName : excludedList)
+            {
+                std::transform(dllName.begin(), dllName.end(), dllName.begin(), towlower);
+                _excluded.InsertOnlyNew(dllName);
+            }
+        }
+        catch (...)
+        {
+        }
     }
 
-    void KnownDlls::UnwindImports(const std::wstring& dllName, const DllCache& cache)
+    void KnownDlls::UnwindImports(const std::wstring& dllName, bool wow64mode)
     {
-        //TOTHINK: x64 and x86 binaries can have different known dlls
+        auto dllPath = System::FileUtils::BuildPath(
+            wow64mode ? 
+                System::SystemInformation::GetSysWow64Dir() 
+              : System::SystemInformation::GetSystem32Dir(),
+            dllName
+        );
+
+        System::ImageMapping mapping(dllPath.c_str());
+        PEParser::ImageFactory factory;
+        auto image = factory.GetImage(mapping);
+
+        if (wow64mode && image->GetBitness() == System::Bitness::Arch64)
+            throw Utils::Exception(L"Invalid knowndll '%s' bitness", dllName.c_str());
+        else if (!wow64mode && image->GetBitness() != System::SystemInformation::GetSystemBitness())
+            throw Utils::Exception(L"Invalid knowndll '%s' bitness", dllName.c_str());
+
+        auto imports = image->LoadImportTable();
+        for (auto& import : imports)
+        {
+            auto dll = std::wstring(import.begin(), import.end());
+            std::transform(dll.begin(), dll.end(), dll.begin(), towlower);
+            auto& known = (wow64mode ? _knownWow64 : _known);
+            if (known.InsertOnlyNew(dll))
+                UnwindImports(dll, wow64mode);
+        }
     }
 
     // =================
@@ -201,11 +304,6 @@ namespace Engine
     bool DllCache::Contain(const std::wstring& dllName)
     {
         return (_dlls.find(dllName) != _dlls.end());
-    }
-
-    std::unordered_set<std::wstring>& DllCache::GetContainer()
-    {
-        return _dlls;
     }
 
     // =================
@@ -227,20 +325,35 @@ namespace Engine
 
     void ImageScanEngine::Scan(std::wstring& imagePath, System::TokenAccessChecker& access)
     {
+        std::wstring normalized(imagePath);
+        System::FileUtils::NormalizePath(normalized);
+
+        System::ImageMapping mapping(normalized.c_str());
+        PEParser::ImageFactory factory;
+        auto image = factory.GetImage(mapping);
+        auto bitness = image->GetBitness();
+
+        bool wow64mode = false;
+        if (System::SystemInformation::GetSystemBitness() == System::Bitness::Arch64 && bitness == System::Bitness::Arch32)
+            wow64mode = true;
+
         std::wstring imageDir;
-        //TODO: normalyze imagePath???
-        Utils::ExtractFileDirectory(imagePath, imageDir);
+        System::FileUtils::ExtractFileDirectory(normalized, imageDir);
 
+        //TODO: don't need to calculate order each time scan started,
+        //      in other way we can calculate it on constructor and
+        //      change an image dir or current dir before we start a
+        //      scan.
         ImageScanOrder order(imageDir, imageDir, access);
-        DllCache scannedDlls;
-
+        order.SetWow64Mode(wow64mode);
         NotifyLoadImageOrder(order);
 
         // Scan initial import table
-        ScanImports(imagePath, order, scannedDlls, access);
+        DllCache scannedDlls;
+        ScanImports(imagePath, bitness, order, scannedDlls, access);
     }
 
-    void ImageScanEngine::ScanModule(std::wstring& dllName, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access)
+    void ImageScanEngine::ScanModule(std::wstring& dllName, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access)
     {
         try
         {
@@ -249,15 +362,11 @@ namespace Engine
             if (!scannedDlls.InsertOnlyNew(dllName))
                 return;
 
-            _knownDlls.ActivateKnownDependencyIfKnown(dllName);
-
-            if (_knownDlls.Contain(dllName, _scannedDlls))
+            if (_knownDlls.Contain(dllName, bitness))
                 return;
 
             auto dir = order.FindDllDirectory(dllName);
-            auto dllPath = dir.GetPath();
-            dllPath += L"\\";
-            dllPath += dllName;
+            auto dllPath = System::FileUtils::BuildPath(dir.GetPath(), dllName);
 
             bool writtable = false;
             if (_checkAccessible && IsFileWritable(dllPath, access))
@@ -269,22 +378,35 @@ namespace Engine
                 NotifyVulnerableDll(dir, dllName, true);
 
             if (_unwindImports && dir.GetType() != ImageDirectory::Type::Unknown)
-                ScanImports(dllPath, order, scannedDlls, access);
+                ScanImports(dllPath, bitness, order, scannedDlls, access);
         }
         catch (Utils::Exception& e)
         {
-            //TODO:
+            std::wcout << L"Skipped: Exception while processing the dll '" << dllName << L"'" << std::endl;
         }
     }
 
-    void ImageScanEngine::ScanImports(std::wstring& dllPath, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access)
+    void ImageScanEngine::ScanImports(std::wstring& dllPath, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access)
     {
         System::ImageMapping mapping(dllPath.c_str());
         PEParser::ImageFactory factory;
         auto image = factory.GetImage(mapping);
+
+        if (image->GetBitness() != bitness)
+            throw Utils::Exception(L"Image bitness mismatched");
+
         auto imports = image->LoadImportTable();
         for (auto& import : imports)
-            ScanModule(std::wstring(import.begin(), import.end()), order, scannedDlls, access);
+        {
+            std::wstring importDll(import.begin(), import.end());
+            if (!System::FileUtils::IsPathRelative(importDll))
+            {
+                std::wcout << L"Skipped: Non-relative path of dll '" << importDll << L"'" << std::endl;
+                continue;
+            }
+
+            ScanModule(std::wstring(import.begin(), import.end()), bitness, order, scannedDlls, access);
+        }
     }
 
     void ImageScanEngine::NotifyLoadImageOrder(LoadImageOrder& dir)
@@ -303,5 +425,4 @@ namespace Engine
         System::SecurityDescriptor descriptor(file);
         return access.IsFileObjectAccessible(descriptor, FILE_WRITE_DATA);
     }
-
 };

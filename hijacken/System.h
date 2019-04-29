@@ -3,10 +3,17 @@
 #include "Utils.h"
 #include <NTLib.h>
 #include <map>
+#include <vector>
 
 namespace System
 {
-// =================
+    enum class Bitness
+    {
+        Arch32,
+        Arch64
+    };
+
+    // =================
 
     class Handle : private std::shared_ptr<void>
     {
@@ -29,7 +36,7 @@ namespace System
         void SetHandle(HANDLE object, DestroyObjectRoutine destroyer = &ObjectDeleter);
     };
 
-// =================
+    // =================
 
     class Process : public Handle
     {
@@ -55,7 +62,7 @@ namespace System
 
     typedef std::shared_ptr<Process> ProcessPtr;
 
-// =================
+    // =================
 
     class ProcessesSnapshot : protected Handle
     {
@@ -70,7 +77,7 @@ namespace System
         void ResetWalking();
     };
 
-// =================
+    // =================
 
     class ModulesSnapshot : protected Handle
     {
@@ -85,7 +92,7 @@ namespace System
         void ResetWalking();
     };
 
-// =================
+    // =================
 
     class ProcessEnvironment;
     typedef std::shared_ptr<ProcessEnvironment> ProcessEnvironmentPtr;
@@ -93,7 +100,7 @@ namespace System
     class ProcessEnvironmentBlock;
     typedef std::shared_ptr<ProcessEnvironmentBlock> ProcessEnvironmentBlockPtr;
 
-// =================
+    // =================
 
     class ProcessInformation
     {
@@ -116,9 +123,11 @@ namespace System
         void GetImageDirectory(std::wstring& directory);
 
         void GetModulePath(HMODULE module, std::wstring& path);
+
+        static Bitness GetCurrentProcessBitness();
     };
 
-// =================
+    // =================
 
     class ProcessEnvironmentBlock
     {
@@ -144,7 +153,7 @@ namespace System
         void GetCurrentDir(std::wstring& directory);
     };
 
-// =================
+    // =================
 
     class ProcessEnvironment
     {
@@ -157,7 +166,7 @@ namespace System
         bool GetValue(const wchar_t* key, std::wstring& output);
     };
 
-// =================
+    // =================
 
     enum class IntegrityLevel
     {
@@ -241,7 +250,7 @@ namespace System
         bool IsFileObjectAccessible(SecurityDescriptor& descriptor, DWORD desiredAccess);
     };
 
-// =================
+    // =================
 
     class File : public Handle
     {
@@ -263,7 +272,16 @@ namespace System
         size_t GetSize();
     };
 
-// =================
+    class FileUtils
+    {
+    public:
+        static std::wstring BuildPath(const std::wstring& directory, const std::wstring& file);
+        static void ExtractFileDirectory(const std::wstring& path, std::wstring& directory);
+        static void NormalizePath(std::wstring& path);
+        static bool IsPathRelative(std::wstring& path);
+    };
+
+    // =================
 
     class Directory : public Handle
     {
@@ -273,17 +291,29 @@ namespace System
         static bool IsDirectory(const wchar_t* path);
     };
 
-// =================
+    // =================
 
     class SystemInformation
     {
     public:
+        static Bitness GetSystemBitness();
+
         static std::wstring GetSystem32Dir();
+        static std::wstring GetSysWow64Dir();
         static std::wstring GetSystemDir();
         static std::wstring GetWindowsDir();
     };
 
-// =================
+    class Wow64NoFsRedirection
+    {
+        bool  _revert;
+        PVOID _old;
+    public:
+        Wow64NoFsRedirection();
+        ~Wow64NoFsRedirection();
+    };
+
+    // =================
 
     enum class BaseKeys
     {
@@ -302,11 +332,13 @@ namespace System
         RegistryKey(BaseKeys base, const wchar_t* key, DWORD access = KEY_QUERY_VALUE);
         ~RegistryKey();
 
-        HKEY GetNativeHKEY();
+        HKEY GetNativeHKEY() const;
 
     private:
         HKEY ConvertBaseToHKEY(BaseKeys base);
     };
+
+    // =================
 
     class RegistryValue
     {
@@ -315,13 +347,77 @@ namespace System
         std::wstring _value;
 
     public:
-        RegistryValue(RegistryKey& key, const wchar_t* value);
+        RegistryValue(const RegistryKey& key, const wchar_t* value);
 
         DWORD GetType() const;
         const std::wstring& GetValue() const;
     };
+    
+    // =================
+
+    class RegistryDwordValue
+    {
+    private:
+        DWORD _value;
+
+    public:
+        RegistryDwordValue(const RegistryValue& value);
+        RegistryDwordValue(const RegistryKey& key, const wchar_t* value);
+
+        DWORD GetValue() const;
+
+    private:
+        void LoadDword(const RegistryValue& value);
+    };
+
+    // =================
+
+    class RegistryMultiStringValue : public std::vector<std::wstring>
+    {
+    public:
+        RegistryMultiStringValue(const RegistryValue& value);
+        RegistryMultiStringValue(const RegistryKey& key, const wchar_t* value);
+    private:
+        void LoadStrings(const RegistryValue& value);
+    };
 
     typedef std::map<std::wstring, RegistryValue> RegistryValues;
+
+    // =================
+
+    class RegistryStringValue
+    {
+    private:
+        std::wstring _value;
+
+    public:
+        RegistryStringValue(const RegistryValue& value);
+        RegistryStringValue(const RegistryKey& key, const wchar_t* value);
+
+        const std::wstring& GetValue() const;
+
+    private:
+        void LoadRegString(const RegistryValue& value);
+    };
+
+    // =================
+
+    class RegistryExpandedStringValue
+    {
+    private:
+        std::wstring _value;
+
+    public:
+        RegistryExpandedStringValue(const RegistryValue& value);
+        RegistryExpandedStringValue(const RegistryKey& key, const wchar_t* value);
+
+        const std::wstring& GetValue() const;
+
+    private:
+        void LoadRegString(const RegistryValue& value);
+    };
+
+    // =================
 
     class EnumRegistryValues
     {

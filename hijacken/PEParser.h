@@ -12,12 +12,6 @@ namespace PEParser
 
 // =================
 
-    enum class Bitness
-    {
-        Arch32,
-        Arch64
-    };
-
     class Image
     {
     protected:
@@ -33,12 +27,16 @@ namespace PEParser
         System::ImageMapping&      _mapping;
         std::vector<SectionRegion> _sections;
 
+        System::Bitness _bitness;
+
         void* GetAddressByRVA(DWORD rva);
         std::string LoadStringByRVA(DWORD rva);
 
     public:
         Image(System::ImageMapping& mapping);
         virtual ~Image();
+
+        System::Bitness GetBitness();
 
         virtual ImportTable LoadImportTable() = 0;
     };
@@ -50,7 +48,7 @@ namespace PEParser
     class ImageFactory
     {
     private:
-        static Bitness GetImageBitness(System::ImageMapping& mapping);
+        static System::Bitness GetImageBitness(System::ImageMapping& mapping);
 
     public:
         ImagePtr GetImage(System::ImageMapping& mapping);
@@ -62,7 +60,6 @@ namespace PEParser
     class ImageImpl : public Image
     {
     private:
-        Bitness _bitness;
         T* _header;
 
     public:

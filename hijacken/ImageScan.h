@@ -47,12 +47,20 @@ namespace Engine
     class LoadImageOrder
     {
     private:
-        std::vector<ImageDirectory> _dirs;
+        std::vector<ImageDirectory> _order;
+        std::vector<ImageDirectory> _orderWow64;
+        bool _wow64mode;
 
     public:
         LoadImageOrder(std::wstring& imageDir, std::wstring& currentDir, System::TokenAccessChecker& access);
 
-        const std::vector<ImageDirectory> GetOrder();
+        void SetWow64Mode(bool value);
+
+        const std::vector<ImageDirectory>& GetOrder();
+        static bool IsSafeSearchEnabled();
+
+    private:
+        bool LoadEnvironmentVariables(System::BaseKeys sourceBase, const wchar_t* sourceKey, bool wow64mode, System::TokenAccessChecker& access);
     };
 
     // =================
@@ -60,13 +68,11 @@ namespace Engine
     class ImageScanOrder : public LoadImageOrder
     {
     public:
-        
         ImageScanOrder(std::wstring& imageDir, std::wstring& currentDir, System::TokenAccessChecker& access);
         
         ImageDirectory FindDllDirectory(std::wstring& dllname);
 
     private:
-
         bool DirContainsDll(std::wstring& dllname, ImageDirectory& dir);
         
     };
@@ -80,35 +86,28 @@ namespace Engine
     public:
         bool InsertOnlyNew(const std::wstring& dllName);
         bool Contain(const std::wstring& dllName);
-
-        std::unordered_set<std::wstring>& GetContainer();
     };
 
     // =================
 
-    /*class KnownDll
-    {
-    public:
-        KnownDll(std::wstring& dllName);
-    };*/
-
     class KnownDlls
     {
     private:
-        std::map<std::wstring, DllCache> _known;
-        DllCache _active;
+        DllCache _known;
+        DllCache _knownWow64;
+        DllCache _excluded;
+
+        bool _supportWow64;
 
     public:
         KnownDlls();
 
-        bool Contain(std::wstring& dllName, DllCache& loadedDlls);
-
-        void ActivateKnownDependencyIfKnown(std::wstring& dllName);
+        bool Contain(std::wstring& dllName, System::Bitness bitness);
 
     private:
 
-        //TODO;
-        void UnwindImports(const std::wstring& dllName, const DllCache& cache);
+        void LoadExcludedDlls();
+        void UnwindImports(const std::wstring& dllName, bool wow64mode);
     };
 
     // =================
@@ -121,8 +120,9 @@ namespace Engine
         bool _scanDelayLoad;
         bool _checkAccessible;
 
-        DllCache  _scannedDlls;
         KnownDlls _knownDlls;
+
+        System::Wow64NoFsRedirection _redirectionOff;
 
     public:
 
@@ -134,9 +134,9 @@ namespace Engine
 
     private:
 
-        void ScanModule(std::wstring& dllName, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access);
+        void ScanModule(std::wstring& dllName, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access);
 
-        void ScanImports(std::wstring& dllPath, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access);
+        void ScanImports(std::wstring& dllPath, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access);
 
         static bool IsFileWritable(std::wstring path, System::TokenAccessChecker& access);
 

@@ -95,7 +95,7 @@ namespace Engine
             std::wstring modulePath, moduleDir;
             info.GetModulePath(module, modulePath);
 
-            Utils::ExtractFileDirectory(modulePath, moduleDir);
+            System::FileUtils::ExtractFileDirectory(modulePath, moduleDir);
 
             if (IsDirWritable(moduleDir, access))
             {

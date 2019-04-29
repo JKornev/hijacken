@@ -178,7 +178,8 @@ namespace Commands
     ScanFile::ScanFile() :
         _unwindImports(true),
         _scanDelayLoad(true),
-        _checkAccess(false)
+        _checkAccess(false),
+        _firstFound(false)
     {
     }
 
@@ -233,18 +234,28 @@ namespace Commands
 
     void ScanFile::NotifyLoadImageOrder(Engine::LoadImageOrder& dirs)
     {
+        std::wcout << L"Safe search: " << (Engine::LoadImageOrder::IsSafeSearchEnabled() ? L"enabled" : L"disabled") << std::endl;
         std::wcout << L"Image load order:" << std::endl;
 
         int i = 0;
         for (auto& dir : dirs.GetOrder())
-        {
             std::wcout << L" " << ++i << L". [" << ConvertImageDirTypeToString(dir.GetType()) << "] " << dir.GetPath().c_str() << std::endl;
-        }
+
+        std::wcout << std::endl;
     }
 
     void ScanFile::NotifyVulnerableDll(Engine::ImageDirectory& dir, std::wstring& dll, bool writtable)
     {
-        std::wcout << L" Dll: " << dll.c_str()  << (writtable ? L" writable" : L"") << std::endl;
+        if (!_firstFound)
+        {
+            _firstFound = true;
+            std::wcout << L"Vulnerable DLLs:" << std::endl << std::endl;
+        }
+
+        std::wcout << L" " << dll.c_str() << L", location " << ConvertImageDirTypeToString(dir.GetType()) << L" directory" << (writtable ? L", is writable" : L"") << std::endl;
+        std::wcout << L"  Vulnerable dirs:" << std::endl;
+
+        std::wcout << std::endl;
     }
 
     const wchar_t* ScanFile::ConvertImageDirTypeToString(Engine::ImageDirectory::Type type)

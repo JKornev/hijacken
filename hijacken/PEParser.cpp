@@ -8,15 +8,15 @@ namespace PEParser
     ImagePtr ImageFactory::GetImage(System::ImageMapping& mapping)
     {
         auto bitness = GetImageBitness(mapping);
-        if (bitness == Bitness::Arch32)
+        if (bitness == System::Bitness::Arch32)
             return ImagePtr(new ImageImpl<IMAGE_NT_HEADERS32>(mapping));
-        else if (bitness == Bitness::Arch64)
+        else if (bitness == System::Bitness::Arch64)
             return ImagePtr(new ImageImpl<IMAGE_NT_HEADERS64>(mapping));
 
         throw Utils::Exception(L"Unknown image bitness");
     }
 
-    Bitness ImageFactory::GetImageBitness(System::ImageMapping& mapping)
+    System::Bitness ImageFactory::GetImageBitness(System::ImageMapping& mapping)
     {
         auto imageSize = mapping.GetSize();
 
@@ -38,9 +38,9 @@ namespace PEParser
             reinterpret_cast<uintptr_t>(dos)+dos->e_lfanew + sizeof(DWORD)
         );
         if (header->Machine == IMAGE_FILE_MACHINE_I386)
-            return Bitness::Arch32;
+            return System::Bitness::Arch32;
         else if (header->Machine == IMAGE_FILE_MACHINE_AMD64)
-            return Bitness::Arch64;
+            return System::Bitness::Arch64;
 
         throw Utils::Exception(L"Unknown PE architecture");
     }
@@ -78,6 +78,11 @@ namespace PEParser
         return std::string(str, str + i);
     }
 
+    System::Bitness Image::GetBitness()
+    {
+        return _bitness;
+    }
+
     // =================
 
     template<typename T>
@@ -86,9 +91,9 @@ namespace PEParser
         _header(nullptr)
     {
         if (sizeof(T) == sizeof(IMAGE_NT_HEADERS32))
-            _bitness = Bitness::Arch32;
+            _bitness = System::Bitness::Arch32;
         else if (sizeof(T) == sizeof(IMAGE_NT_HEADERS64))
-            _bitness = Bitness::Arch64;
+            _bitness = System::Bitness::Arch64;
         else
             throw Utils::Exception(L"Invalid architecture");
 
@@ -106,9 +111,9 @@ namespace PEParser
         if (_header->Signature != IMAGE_NT_SIGNATURE)
             throw Utils::Exception(L"Invalid NT signature");
 
-        if (_bitness == Bitness::Arch32 && _header->FileHeader.Machine != IMAGE_FILE_MACHINE_I386)
+        if (_bitness == System::Bitness::Arch32 && _header->FileHeader.Machine != IMAGE_FILE_MACHINE_I386)
             throw Utils::Exception(L"Invalid NT architecture");
-        else if (_bitness == Bitness::Arch64 && _header->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64)
+        else if (_bitness == System::Bitness::Arch64 && _header->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64)
             throw Utils::Exception(L"Invalid NT architecture");
 
         if (!_header->FileHeader.NumberOfSections)

@@ -70,6 +70,8 @@ namespace Commands
         bool _scanDelayLoad;
         bool _checkAccess;
 
+        bool _firstFound;
+
         std::wstring _filePath;
 
         void ScanImage(std::string path);
