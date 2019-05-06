@@ -104,9 +104,9 @@ namespace Commands
 
         std::wcout << L"Access token information:" << std::endl;
         token->GetUserNameString(str);
-        std::wcout << L"  " << str.c_str() << std::endl;
+        std::wcout << L"  " << str << std::endl;
         token->GetUserSIDString(str);
-        std::wcout << L"  " << str.c_str() << std::endl;
+        std::wcout << L"  " << str << std::endl;
         std::wcout << L"  Integrity: " << ConvertIntegrityLevelToString(token->GetIntegrityLevel())
             << L", " << (token->IsElevated() ? L"Elevated" : L"Not-Elevated") << std::endl;
         std::wcout << std::endl;
@@ -234,17 +234,19 @@ namespace Commands
 
     void ScanFile::NotifyLoadImageOrder(Engine::LoadImageOrder& dirs)
     {
+        std::wcout << std::endl;
         std::wcout << L"Safe search: " << (Engine::LoadImageOrder::IsSafeSearchEnabled() ? L"enabled" : L"disabled") << std::endl;
-        std::wcout << L"Image load order:" << std::endl;
+        std::wcout << L"Expected image load order:" << std::endl;
 
         int i = 0;
         for (auto& dir : dirs.GetOrder())
-            std::wcout << L" " << ++i << L". [" << ConvertImageDirTypeToString(dir.GetType()) << "] " << dir.GetPath().c_str() << std::endl;
+            std::wcout << L" " << ++i << L". " << (dir.IsAccessible() ? L"A" : L" ") << " [" << ConvertImageDirTypeToString(dir.GetType()) << "] " << dir.GetPath() << std::endl;
+
 
         std::wcout << std::endl;
     }
 
-    void ScanFile::NotifyVulnerableDll(Engine::ImageDirectory& dir, std::wstring& dll, bool writtable)
+    void ScanFile::NotifyVulnerableDll(Engine::ImageDirectory& dir, std::wstring& dll, bool writtable, std::vector<const Engine::ImageDirectory*>& vulnDirs)
     {
         if (!_firstFound)
         {
@@ -252,8 +254,18 @@ namespace Commands
             std::wcout << L"Vulnerable DLLs:" << std::endl << std::endl;
         }
 
-        std::wcout << L" " << dll.c_str() << L", location " << ConvertImageDirTypeToString(dir.GetType()) << L" directory" << (writtable ? L", is writable" : L"") << std::endl;
-        std::wcout << L"  Vulnerable dirs:" << std::endl;
+        std::wcout << L" " << dll << (writtable ? L", is writable" : L"") << std::endl;
+        std::wcout << L"  Location: " << (dir.GetType() != Engine::ImageDirectory::Type::Unknown ? dir.GetPath() : L"not found") << std::endl;
+        std::wcout << L"  Type: " << ConvertImageDirTypeToString(dir.GetType()) << std::endl;
+
+        if (dir.GetType() != Engine::ImageDirectory::Type::Base)
+        {
+            std::wcout << L"  Vulnerable dirs:" << std::endl;
+
+            int i = 0;
+            for (auto& vulnDir : vulnDirs)
+                std::wcout << L"    " << ++i << L". [" << ConvertImageDirTypeToString(vulnDir->GetType()) << "] " << vulnDir->GetPath() << std::endl;
+        }
 
         std::wcout << std::endl;
     }
@@ -333,14 +345,14 @@ namespace Commands
         {
             std::wcout << ConvertDirDetectionToString(detection.first) << L":" << std::endl;
             for (auto& dir : detection.second)
-                std::wcout << L"  " << dir.c_str() << std::endl;
+                std::wcout << L"  " << dir << std::endl;
         }
 
         for (auto& detection : _detectedFiles)
         {
             std::wcout << ConvertFileDetectionToString(detection.first) << L":" << std::endl;
             for (auto& file : detection.second)
-                std::wcout << L"  " << file.c_str() << std::endl;
+                std::wcout << L"  " << file << std::endl;
         }
     }
 
@@ -408,20 +420,20 @@ namespace Commands
 
                 if (!_detectedDirs.empty() || !_detectedFiles.empty())
                 {
-                    std::wcout << L"Process " << processId << L", " << processName.c_str() << std::endl;
+                    std::wcout << L"Process " << processId << L", " << processName << std::endl;
 
                     for (auto& detection : _detectedDirs)
                     {
                         std::wcout << L"  " << Engine::ProcessScanEngine::ConvertDirDetectionToString(detection.first) << L":" << std::endl;
                         for (auto& dir : detection.second)
-                            std::wcout << L"    " << dir.c_str() << std::endl;
+                            std::wcout << L"    " << dir << std::endl;
                     }
 
                     for (auto& detection : _detectedFiles)
                     {
                         std::wcout << L"  " << Engine::ProcessScanEngine::ConvertFileDetectionToString(detection.first) << L":" << std::endl;
                         for (auto& file : detection.second)
-                            std::wcout << L"    " << file.c_str() << std::endl;
+                            std::wcout << L"    " << file << std::endl;
                     }
 
                     std::wcout << std::endl;

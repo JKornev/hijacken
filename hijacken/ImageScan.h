@@ -36,19 +36,23 @@ namespace Engine
         ImageDirectory();
         ImageDirectory(Type type, std::wstring& imageDir, System::TokenAccessChecker& access);
 
+        bool operator==(const ImageDirectory& compared) const;
+
         const std::wstring& GetPath() const;
         Type GetType() const;
         bool IsAccessible() const;
 
     };
 
+    typedef std::vector<ImageDirectory> ImageDirectories;
+
     // =================
 
     class LoadImageOrder
     {
     private:
-        std::vector<ImageDirectory> _order;
-        std::vector<ImageDirectory> _orderWow64;
+        ImageDirectories _order;
+        ImageDirectories _orderWow64;
         bool _wow64mode;
 
     public:
@@ -56,7 +60,7 @@ namespace Engine
 
         void SetWow64Mode(bool value);
 
-        const std::vector<ImageDirectory>& GetOrder();
+        const ImageDirectories& GetOrder();
         static bool IsSafeSearchEnabled();
 
     private:
@@ -112,7 +116,7 @@ namespace Engine
 
     // =================
 
-    class ImageScanEngine
+    class ImageScanEngine : public System::Wow64NoFsRedirection
     {
     private:
 
@@ -121,8 +125,6 @@ namespace Engine
         bool _checkAccessible;
 
         KnownDlls _knownDlls;
-
-        System::Wow64NoFsRedirection _redirectionOff;
 
     public:
 
@@ -135,15 +137,16 @@ namespace Engine
     private:
 
         void ScanModule(std::wstring& dllName, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access);
-
         void ScanImports(std::wstring& dllPath, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access);
 
-        static bool IsFileWritable(std::wstring path, System::TokenAccessChecker& access);
+        std::vector<const ImageDirectory*> CollectVulnerableDirs(const ImageDirectory& last, ImageScanOrder& order);
+
+        static bool IsFileWritable(std::wstring& path, System::TokenAccessChecker& access);
 
     protected:
 
         virtual void NotifyLoadImageOrder(LoadImageOrder& dir);
-        virtual void NotifyVulnerableDll(ImageDirectory& dir, std::wstring& dll, bool writtable);
+        virtual void NotifyVulnerableDll(ImageDirectory& dir, std::wstring& dll, bool writtable, std::vector<const ImageDirectory*>& vulnDirs);
 
     };
 };

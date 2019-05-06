@@ -26,6 +26,20 @@ namespace Engine
         _accessible = access.IsFileObjectAccessible(descriptor, FILE_ADD_FILE);
     }
 
+    bool ImageDirectory::operator==(const ImageDirectory& compared) const
+    {
+        if (_type != compared._type)
+            return false;
+        
+        if (_accessible != compared._accessible)
+            return false;
+        
+        if (_directory != compared._directory)
+            return false;
+
+        return true;
+    }
+
     const std::wstring& ImageDirectory::GetPath()  const
     {
         return _directory;
@@ -101,7 +115,7 @@ namespace Engine
         _wow64mode = value;
     }
 
-    const std::vector<ImageDirectory>& LoadImageOrder::GetOrder()
+    const ImageDirectories& LoadImageOrder::GetOrder()
     {
         if (_wow64mode)
             return _orderWow64;
@@ -208,7 +222,7 @@ namespace Engine
 
         LoadExcludedDlls();
 
-        auto loadKnownDll = [&](const std::wstring dll)
+        auto loadKnownDll = [&](const std::wstring& dll)
         {
             if (_excluded.Contain(dll))
                 return;
@@ -367,15 +381,17 @@ namespace Engine
 
             auto dir = order.FindDllDirectory(dllName);
             auto dllPath = System::FileUtils::BuildPath(dir.GetPath(), dllName);
+            
+            auto vulnerableDirs = CollectVulnerableDirs(dir, order);
 
             bool writtable = false;
-            if (_checkAccessible && IsFileWritable(dllPath, access))
+            if (_checkAccessible && dir.GetType() != ImageDirectory::Type::Unknown && IsFileWritable(dllPath, access))
                 writtable = true;
 
             if (dir.GetType() != ImageDirectory::Type::Base)
-                NotifyVulnerableDll(dir, dllName, writtable);
+                NotifyVulnerableDll(dir, dllName, writtable, vulnerableDirs);
             else if (dir.GetType() == ImageDirectory::Type::Base && writtable)
-                NotifyVulnerableDll(dir, dllName, true);
+                NotifyVulnerableDll(dir, dllName, true, vulnerableDirs);
 
             if (_unwindImports && dir.GetType() != ImageDirectory::Type::Unknown)
                 ScanImports(dllPath, bitness, order, scannedDlls, access);
@@ -409,17 +425,40 @@ namespace Engine
         }
     }
 
+    std::vector<const ImageDirectory*> ImageScanEngine::CollectVulnerableDirs(const ImageDirectory& last, ImageScanOrder& order)
+    {
+        std::vector<const ImageDirectory*> vulnerableDirs;
+        
+        for (const auto& dir : order.GetOrder())
+        {
+            if (dir == last)
+                break;
+
+            if (_checkAccessible)
+            {
+                if (dir.IsAccessible())
+                    vulnerableDirs.push_back(&dir);
+            }
+            else
+            {
+                vulnerableDirs.push_back(&dir);
+            }
+        }
+
+        return vulnerableDirs;
+    }
+
     void ImageScanEngine::NotifyLoadImageOrder(LoadImageOrder& dir)
     {
         // Stub
     }
 
-    void ImageScanEngine::NotifyVulnerableDll(ImageDirectory& dir, std::wstring& dll, bool writtable)
+    void ImageScanEngine::NotifyVulnerableDll(ImageDirectory& dir, std::wstring& dll, bool writtable, std::vector<const ImageDirectory*>& vulnDirs)
     {
         // Stub
     }
 
-    bool ImageScanEngine::IsFileWritable(std::wstring path, System::TokenAccessChecker& access)
+    bool ImageScanEngine::IsFileWritable(std::wstring& path, System::TokenAccessChecker& access)
     {
         System::File file(path.c_str());
         System::SecurityDescriptor descriptor(file);
