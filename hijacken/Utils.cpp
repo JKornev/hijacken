@@ -95,6 +95,12 @@ namespace Utils
         size_t startOffset = 0;
         auto endOffset = str.find(seporator);
 
+        if (endOffset == std::wstring::npos)
+        {
+            push_back(str);
+            return;
+        }
+
         while (endOffset != std::wstring::npos)
         {
             if (startOffset != endOffset)
@@ -102,6 +108,9 @@ namespace Utils
             startOffset = endOffset + 1;
             endOffset = str.find(seporator, startOffset);
         }
+
+        if (startOffset < str.size())
+            push_back(std::wstring(str.c_str() + startOffset));
     }
 
 };

@@ -2,9 +2,6 @@
 
 namespace Engine
 {
-    ProcessScanEngine::ProcessScanEngine()
-    {
-    }
 
     void ProcessScanEngine::Scan(DWORD pid, System::TokenAccessChecker& access)
     {

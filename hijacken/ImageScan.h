@@ -25,11 +25,19 @@ namespace Engine
             Unknown
         };
 
+        enum class State
+        {
+            Existing,
+            NotExisting,
+            Overlapped
+        };
+
     private:
 
         std::wstring _directory;
         Type         _type;
         bool         _accessible;
+        State        _state;
 
     public:
 
@@ -40,6 +48,7 @@ namespace Engine
 
         const std::wstring& GetPath() const;
         Type GetType() const;
+        State GetState() const;
         bool IsAccessible() const;
 
     };
@@ -56,7 +65,7 @@ namespace Engine
         bool _wow64mode;
 
     public:
-        LoadImageOrder(std::wstring& imageDir, std::wstring& currentDir, System::TokenAccessChecker& access);
+        LoadImageOrder(std::wstring& imageDir, std::wstring& currentDir, System::EnvironmentVariables& envVars, System::TokenAccessChecker& access);
 
         void SetWow64Mode(bool value);
 
@@ -64,7 +73,7 @@ namespace Engine
         static bool IsSafeSearchEnabled();
 
     private:
-        bool LoadEnvironmentVariables(System::BaseKeys sourceBase, const wchar_t* sourceKey, bool wow64mode, System::TokenAccessChecker& access);
+        void LoadEnvironmentVariables(System::EnvironmentVariables& envVars, bool wow64mode, System::TokenAccessChecker& access);
     };
 
     // =================
@@ -72,7 +81,7 @@ namespace Engine
     class ImageScanOrder : public LoadImageOrder
     {
     public:
-        ImageScanOrder(std::wstring& imageDir, std::wstring& currentDir, System::TokenAccessChecker& access);
+        ImageScanOrder(std::wstring& imageDir, std::wstring& currentDir, System::EnvironmentVariables& envVars, System::TokenAccessChecker& access);
         
         ImageDirectory FindDllDirectory(std::wstring& dllname);
 
@@ -116,6 +125,24 @@ namespace Engine
 
     // =================
 
+    class ActivationContextStack
+    {
+    private:
+
+    public:
+        ActivationContextStack();
+    };
+
+    class LoadManifestAndPush
+    {
+    private:
+
+    public:
+        LoadManifestAndPush(System::ImageMapping& image, ActivationContextStack& stack);
+    };
+
+    // =================
+
     class ImageScanEngine : public System::Wow64NoFsRedirection
     {
     private:
@@ -132,12 +159,12 @@ namespace Engine
         void SetOptionUnwindDelayLoadImport(bool enable);
         void SetOptionAccessibleOnly(bool enable);
 
-        void Scan(std::wstring& imagePath, System::TokenAccessChecker& access);
+        void Scan(std::wstring& imagePath, System::EnvironmentVariables& envVars, System::TokenAccessChecker& access);
 
     private:
 
-        void ScanModule(std::wstring& dllName, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access);
-        void ScanImports(std::wstring& dllPath, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access);
+        void ScanModule(std::wstring& dllName, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, ActivationContextStack& actxStack, System::TokenAccessChecker& access);
+        void ScanImports(std::wstring& dllPath, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, ActivationContextStack& actxStack, System::TokenAccessChecker& access);
 
         std::vector<const ImageDirectory*> CollectVulnerableDirs(const ImageDirectory& last, ImageScanOrder& order);
 

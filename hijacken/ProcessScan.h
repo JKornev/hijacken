@@ -23,8 +23,6 @@ namespace Engine
             LoadedModule
         };
 
-        ProcessScanEngine();
-
         void Scan(DWORD pid, System::TokenAccessChecker& access);
 
         virtual void NotifyWritableDirectory(DetectionDirType detection, std::wstring& dirPath) = 0;

@@ -9,17 +9,25 @@ namespace Engine
 
     ImageDirectory::ImageDirectory() :
         _type(ImageDirectory::Type::Unknown),
-        _accessible(false)
+        _accessible(false),
+        _state(State::NotExisting)
     {
     }
 
     ImageDirectory::ImageDirectory(Type type, std::wstring& imageDir, System::TokenAccessChecker& access) :
         _directory(imageDir),
         _accessible(false),
-        _type(type)
+        _type(type),
+        _state(State::Existing)
     {
+        if (!System::FileUtils::PathExists(_directory.c_str()))
+        {
+            _state = State::NotExisting;
+            return;
+        }
+
         if (!System::Directory::IsDirectory(_directory.c_str()))
-            throw Utils::Exception(L"Isn't directory '%s'", _directory.c_str());
+            _state = State::Overlapped;
 
         System::Directory directory(_directory.c_str());
         System::SecurityDescriptor descriptor(directory);
@@ -29,6 +37,9 @@ namespace Engine
     bool ImageDirectory::operator==(const ImageDirectory& compared) const
     {
         if (_type != compared._type)
+            return false;
+
+        if (_state != compared._state)
             return false;
         
         if (_accessible != compared._accessible)
@@ -50,6 +61,11 @@ namespace Engine
         return _type;
     }
 
+    ImageDirectory::State ImageDirectory::GetState() const
+    {
+        return _state;
+    }
+
     bool ImageDirectory::IsAccessible() const
     {
         return _accessible;
@@ -57,7 +73,7 @@ namespace Engine
 
     // =================
 
-    LoadImageOrder::LoadImageOrder(std::wstring& imageDir, std::wstring& currentDir, System::TokenAccessChecker& access) : 
+    LoadImageOrder::LoadImageOrder(std::wstring& imageDir, std::wstring& currentDir, System::EnvironmentVariables& envVars, System::TokenAccessChecker& access) :
         _wow64mode(false)
     {
         auto supportWow64 = (System::SystemInformation::GetSystemBitness() == System::Bitness::Arch64);
@@ -101,13 +117,7 @@ namespace Engine
             putDirectory(ImageDirectory::Type::Current, imageDir);
 
         // Environment dirs
-        if (!LoadEnvironmentVariables(System::BaseKeys::CurrentUser, L"Environment", supportWow64, access))
-            LoadEnvironmentVariables(
-                System::BaseKeys::LocalMachine,
-                L"System\\CurrentControlSet\\Control\\Session Manager\\Environment",
-                supportWow64,
-                access
-            );
+        LoadEnvironmentVariables(envVars, supportWow64, access);
     }
 
     void LoadImageOrder::SetWow64Mode(bool value)
@@ -145,20 +155,12 @@ namespace Engine
         return enabled;
     }
 
-    bool LoadImageOrder::LoadEnvironmentVariables(System::BaseKeys sourceBase, const wchar_t* sourceKey, bool wow64mode, System::TokenAccessChecker& access)
+    void LoadImageOrder::LoadEnvironmentVariables(System::EnvironmentVariables& envVars, bool wow64mode, System::TokenAccessChecker& access)
     {
         std::wstring rawPaths;
 
-        try
-        {
-            System::RegistryKey key(sourceBase, sourceKey);
-            System::RegistryExpandedStringValue pathValue(key, L"Path");
-            rawPaths = pathValue.GetValue();
-        }
-        catch (...)
-        {
-            return false;
-        }
+        if (!envVars.GetValue(L"Path", rawPaths) && !envVars.GetValue(L"PATH", rawPaths) && !envVars.GetValue(L"path", rawPaths))
+            return;
 
         Utils::SeparatedStrings paths(rawPaths, L';');
 
@@ -170,13 +172,13 @@ namespace Engine
                 _orderWow64.emplace_back(ImageDirectory::Type::Environment, dir, access);
         }
 
-        return true;
+        return;
     }
 
     // =================
 
-    ImageScanOrder::ImageScanOrder(std::wstring& imageDir, std::wstring& currentDir, System::TokenAccessChecker& access) :
-        LoadImageOrder(imageDir, currentDir, access)
+    ImageScanOrder::ImageScanOrder(std::wstring& imageDir, std::wstring& currentDir, System::EnvironmentVariables& envVars, System::TokenAccessChecker& access) :
+        LoadImageOrder(imageDir, currentDir, envVars, access)
     {
     }
 
@@ -198,14 +200,7 @@ namespace Engine
             dllname
         );
 
-        auto attribs = ::GetFileAttributesW(path.c_str());
-        if (attribs == INVALID_FILE_ATTRIBUTES)
-            return false;
-
-        if (attribs & FILE_ATTRIBUTE_DIRECTORY)
-            return false;
-
-        return true;
+        return System::FileUtils::PathExists(path.c_str());
     }
 
     // =================
@@ -244,7 +239,7 @@ namespace Engine
             if (value.first == L"DllDirectory" || value.first == L"DllDirectory32")
                 continue;
 
-            if (value.second.GetType() != REG_SZ)
+            if (value.second.GetType() != System::RegistryValueType::String)
                 continue;
 
             auto dllName = std::wstring(value.second.GetValue().c_str());
@@ -337,7 +332,7 @@ namespace Engine
         _checkAccessible = enable;
     }
 
-    void ImageScanEngine::Scan(std::wstring& imagePath, System::TokenAccessChecker& access)
+    void ImageScanEngine::Scan(std::wstring& imagePath, System::EnvironmentVariables& envVars, System::TokenAccessChecker& access)
     {
         std::wstring normalized(imagePath);
         System::FileUtils::NormalizePath(normalized);
@@ -358,16 +353,20 @@ namespace Engine
         //      in other way we can calculate it on constructor and
         //      change an image dir or current dir before we start a
         //      scan.
-        ImageScanOrder order(imageDir, imageDir, access);
+        ImageScanOrder order(imageDir, imageDir, envVars, access);
         order.SetWow64Mode(wow64mode);
         NotifyLoadImageOrder(order);
 
+        // Load SxS
+        ActivationContextStack actxStack;
+        LoadManifestAndPush manifest(mapping, actxStack);
+
         // Scan initial import table
         DllCache scannedDlls;
-        ScanImports(imagePath, bitness, order, scannedDlls, access);
+        ScanImports(imagePath, bitness, order, scannedDlls, actxStack, access);
     }
 
-    void ImageScanEngine::ScanModule(std::wstring& dllName, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access)
+    void ImageScanEngine::ScanModule(std::wstring& dllName, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, ActivationContextStack& actxStack, System::TokenAccessChecker& access)
     {
         try
         {
@@ -394,7 +393,7 @@ namespace Engine
                 NotifyVulnerableDll(dir, dllName, true, vulnerableDirs);
 
             if (_unwindImports && dir.GetType() != ImageDirectory::Type::Unknown)
-                ScanImports(dllPath, bitness, order, scannedDlls, access);
+                ScanImports(dllPath, bitness, order, scannedDlls, actxStack, access);
         }
         catch (Utils::Exception& e)
         {
@@ -402,7 +401,7 @@ namespace Engine
         }
     }
 
-    void ImageScanEngine::ScanImports(std::wstring& dllPath, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, System::TokenAccessChecker& access)
+    void ImageScanEngine::ScanImports(std::wstring& dllPath, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, ActivationContextStack& actxStack, System::TokenAccessChecker& access)
     {
         System::ImageMapping mapping(dllPath.c_str());
         PEParser::ImageFactory factory;
@@ -421,7 +420,7 @@ namespace Engine
                 continue;
             }
 
-            ScanModule(std::wstring(import.begin(), import.end()), bitness, order, scannedDlls, access);
+            ScanModule(std::wstring(import.begin(), import.end()), bitness, order, scannedDlls, actxStack, access);
         }
     }
 
@@ -450,12 +449,12 @@ namespace Engine
 
     void ImageScanEngine::NotifyLoadImageOrder(LoadImageOrder& dir)
     {
-        // Stub
+        // Stub, does nothing here
     }
 
     void ImageScanEngine::NotifyVulnerableDll(ImageDirectory& dir, std::wstring& dll, bool writtable, std::vector<const ImageDirectory*>& vulnDirs)
     {
-        // Stub
+        // Stub, does nothing here
     }
 
     bool ImageScanEngine::IsFileWritable(std::wstring& path, System::TokenAccessChecker& access)

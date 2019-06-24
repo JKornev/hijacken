@@ -60,9 +60,35 @@ namespace Commands
 
 // =================
 
+    class EnvironmentOptions
+    {
+    private:
+        enum class EnvironmentSource
+        {
+            System,
+            User,
+            Process,
+            Inherit,
+            Off
+        };
+
+        EnvironmentSource _envSource;
+        DWORD _sourceProcessId;
+
+    protected:
+        EnvironmentOptions();
+
+        void LoadArgs(Utils::Arguments& args);
+
+        System::EnvironmentVariablesPtr GetEnvironment();
+    };
+
+// =================
+
     class ScanFile : 
         public ICommand,
         protected ImpersonationOptions,
+        protected EnvironmentOptions,
         protected Engine::ImageScanEngine
     {
     private:
@@ -89,6 +115,7 @@ namespace Commands
 
     public:
         static const wchar_t* ConvertImageDirTypeToString(Engine::ImageDirectory::Type type);
+        static const wchar_t* ConvertImageDirStateToString(const Engine::ImageDirectory& dir);
     };
 
 // =================

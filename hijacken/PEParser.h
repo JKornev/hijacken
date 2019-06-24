@@ -34,7 +34,7 @@ namespace PEParser
 
     public:
         Image(System::ImageMapping& mapping);
-        virtual ~Image();
+        virtual ~Image() = default;
 
         System::Bitness GetBitness();
 
@@ -64,7 +64,7 @@ namespace PEParser
 
     public:
         ImageImpl(System::ImageMapping& mapping);
-        virtual ~ImageImpl();
+        virtual ~ImageImpl() = default;
 
         ImportTable LoadImportTable() override;
     };

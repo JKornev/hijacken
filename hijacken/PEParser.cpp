@@ -52,10 +52,6 @@ namespace PEParser
     {
     }
 
-    Image::~Image()
-    {
-    }
-
     void* Image::GetAddressByRVA(DWORD rva)
     {
         if (rva > _mapping.GetSize())
@@ -135,11 +131,6 @@ namespace PEParser
             region.virtualSize   = sections[i].Misc.VirtualSize;
             _sections.push_back(region);
         }
-    }
-
-    template<typename T>
-    ImageImpl<T>::~ImageImpl()
-    {
     }
 
     template<typename T>

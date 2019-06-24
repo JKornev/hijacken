@@ -5,6 +5,7 @@
 #include <psapi.h>
 #include <sddl.h>
 #include <shlwapi.h>
+#include <string.h>
 
 #pragma comment(lib, "shlwapi.lib")
 
@@ -338,6 +339,14 @@ namespace System
         return (sizeof(void*) == sizeof(long long) ? Bitness::Arch64 : Bitness::Arch32);
     }
 
+    EnvironmentVariablesPtr ProcessInformation::GetCurrentEnvironmentVariables()
+    {
+        auto vars = ::GetEnvironmentStringsW();
+        if (!vars)
+            throw Utils::Exception(L"Can't receive a current environment variables");
+        return EnvironmentVariablesPtr(new EnvironmentVariables(vars));
+    }
+
     // =================
 
     ProcessEnvironmentBlock::ProcessEnvironmentBlock(ProcessInformation& processInfo) : _peb(nullptr)
@@ -353,14 +362,14 @@ namespace System
         _process = processInfo.GetProcess();
     }
 
-    ProcessEnvironmentPtr ProcessEnvironmentBlock::GetProcessEnvironment()
+    EnvironmentVariablesPtr ProcessEnvironmentBlock::GetProcessEnvironment()
     {
         LoadProcessParameters();
         
         if (!_paramsEnv.size())
             _process->ReadMemory(_params->Environment, _paramsEnv, _params->EnvironmentSize);
 
-        return ProcessEnvironmentPtr(new ProcessEnvironment(_paramsEnv));
+        return EnvironmentVariablesPtr(new EnvironmentVariables(_paramsEnv));
     }
 
     void ProcessEnvironmentBlock::GetCurrentDir(std::wstring& directory)
@@ -387,17 +396,36 @@ namespace System
 
     // =================
 
-    ProcessEnvironment::ProcessEnvironment(std::wstring& environment)
+    EnvironmentVariables::EnvironmentVariables(LPWCH environment)
+    {
+        auto start = environment;
+        auto end = environment + wcslen(environment);
+
+        while (start != end)
+        {
+            auto entry = std::wstring(start, end);
+
+            auto keyEnd = entry.find(L'=');
+            if (keyEnd != 0 && keyEnd != std::wstring::npos)
+                _variables[std::wstring(&entry[0], &entry[keyEnd])] = std::wstring(&entry[keyEnd + 1], &entry[entry.size()]);
+
+            start = end + 1;
+            end = start + wcslen(start);
+        }
+    }
+
+    EnvironmentVariables::EnvironmentVariables(const std::wstring& environment)
     {
         size_t startOffset = 0;
         auto endOffset = environment.find(L'\0');
+        //TODO: what if only one var
 
         while (endOffset != std::wstring::npos)
         {
-            auto entry = std::wstring(&environment[startOffset]);
+            auto entry = std::wstring(environment.c_str() + startOffset);
 
             auto keyEnd = entry.find(L'=');
-            if (keyEnd != 0 && keyEnd < entry.size())
+            if (keyEnd != 0 && keyEnd != std::wstring::npos)
                 _variables[std::wstring(&entry[0], &entry[keyEnd])] = std::wstring(&entry[keyEnd + 1], &entry[entry.size()]);
 
             startOffset = endOffset + 1;
@@ -405,7 +433,25 @@ namespace System
         }
     }
 
-    bool ProcessEnvironment::GetValue(const wchar_t* key, std::wstring& output)
+    EnvironmentVariables::EnvironmentVariables(const RegistryValues& values)
+    {
+        for (auto& value : values)
+        {
+            auto type = value.second.GetType();
+            if (type == RegistryValueType::String)
+            {
+                _variables[value.first] = value.second.GetValue();
+            }
+            else if (type == RegistryValueType::ExpandString)
+            {
+                RegistryExpandedStringValue expanded(value.second);
+                _variables[value.first] = expanded.GetValue();
+            }
+            //TODO: what happens if we meet another type?
+        }
+    }
+
+    bool EnvironmentVariables::GetValue(const wchar_t* key, std::wstring& output) const
     {
         auto value = _variables.find(std::wstring(key));
 
@@ -860,7 +906,7 @@ namespace System
     void FileUtils::NormalizePath(std::wstring& path)
     {
         std::vector<wchar_t> buffer;
-        buffer.resize(1/*MAX_PATH*/);
+        buffer.resize(MAX_PATH);
         
         for (int i = 0; i < 5; i++)
         {
@@ -882,9 +928,14 @@ namespace System
         throw Utils::Exception(L"Can't normalize path");
     }
 
-    bool FileUtils::IsPathRelative(std::wstring& path)
+    bool FileUtils::IsPathRelative(const std::wstring& path)
     {
         return !!::PathIsRelativeW(path.c_str());
+    }
+
+    bool FileUtils::PathExists(const std::wstring& path)
+    {
+        return !!::PathFileExistsW(path.c_str());
     }
 
     // =================
@@ -899,6 +950,8 @@ namespace System
     bool Directory::IsDirectory(const wchar_t* path)
     {
         DWORD attribs = ::GetFileAttributesW(path);
+        if (attribs == INVALID_FILE_ATTRIBUTES)
+            return false;
         return (attribs & FILE_ATTRIBUTE_DIRECTORY ? true : false);
     }
 
@@ -1036,7 +1089,8 @@ namespace System
 
     // =================
 
-    RegistryValue::RegistryValue(const RegistryKey& key, const wchar_t* value)
+    RegistryValue::RegistryValue(const RegistryKey& key, const wchar_t* value) : 
+        _type(RegistryValueType::Unknown)
     {
         DWORD size = 0x400;
 
@@ -1044,11 +1098,12 @@ namespace System
         
         while (true) //TODO: max amount of attempts
         {
+            DWORD type;
             auto result = ::RegQueryValueExW(
                 key.GetNativeHKEY(), 
                 value, 
                 NULL, 
-                &_type, 
+                &type,
                 reinterpret_cast<LPBYTE>(
                     const_cast<wchar_t*>(_value.c_str())
                 ), 
@@ -1064,6 +1119,8 @@ namespace System
                 throw Utils::Exception(result, L"RegQueryValueExW failed with code %d", result);
             }
 
+            _type = ConvertToRegistryType(type);
+
             size_t charsSize = size / sizeof(wchar_t);
             charsSize += (size % 2 ? 1 : 0);
             _value.resize(charsSize);
@@ -1071,7 +1128,7 @@ namespace System
         }
     }
 
-    DWORD RegistryValue::GetType() const
+    RegistryValueType RegistryValue::GetType() const
     {
         return _type;
     }
@@ -1079,6 +1136,40 @@ namespace System
     const std::wstring& RegistryValue::GetValue() const
     {
         return _value;
+    }
+
+    RegistryValueType RegistryValue::ConvertToRegistryType(DWORD type)
+    {
+        switch (type)
+        {
+        case REG_NONE:
+            return RegistryValueType::None;
+        case REG_SZ:
+            return RegistryValueType::String;
+        case REG_EXPAND_SZ:
+            return RegistryValueType::ExpandString;
+        case REG_BINARY:
+            return RegistryValueType::Binary;
+        case REG_DWORD:
+            return RegistryValueType::Dword;
+        case REG_DWORD_BIG_ENDIAN:
+            return RegistryValueType::DwordBigEndian;
+        case REG_LINK:
+            return RegistryValueType::Link;
+        case REG_MULTI_SZ:
+            return RegistryValueType::MultiString;
+        case REG_RESOURCE_LIST:
+            return RegistryValueType::ResourceList;
+        case REG_FULL_RESOURCE_DESCRIPTOR:
+            return RegistryValueType::FullResourceDescrition;
+        case REG_RESOURCE_REQUIREMENTS_LIST:
+            return RegistryValueType::ResourceRequirementsList;
+        case REG_QWORD:
+            return RegistryValueType::Qword;
+        default:
+            break;
+        }
+        return RegistryValueType::Unknown;
     }
 
     // =================
@@ -1101,12 +1192,12 @@ namespace System
 
     void RegistryDwordValue::LoadDword(const RegistryValue& value)
     {
-        if (value.GetType() != REG_DWORD)
-            throw Utils::Exception(L"Not a multi-string value '%s'", value);
+        if (value.GetType() != RegistryValueType::Dword)
+            throw Utils::Exception(L"Not a dword value, type:%d", value.GetType());
 
         auto& data = value.GetValue();
         if (data.size() < sizeof(DWORD))
-            throw Utils::Exception(L"Invalid DWORD data size %d", data.size());
+            throw Utils::Exception(L"Invalid dword data size %d", data.size());
 
         _value = *reinterpret_cast<const DWORD*>(data.c_str());
     }
@@ -1126,8 +1217,8 @@ namespace System
 
     void RegistryMultiStringValue::LoadStrings(const RegistryValue& value)
     {
-        if (value.GetType() != REG_MULTI_SZ)
-            throw Utils::Exception(L"Not a multi-string value '%s'", value);
+        if (value.GetType() != RegistryValueType::MultiString)
+            throw Utils::Exception(L"Not a multi-string value, type:%d", value.GetType());
 
         auto data = value.GetValue();
         const wchar_t* string = data.c_str();
@@ -1175,8 +1266,8 @@ namespace System
 
     void RegistryStringValue::LoadRegString(const RegistryValue& value)
     {
-        if (value.GetType() != REG_SZ)
-            throw Utils::Exception(L"Not a multi-string value '%s'", value);
+        if (value.GetType() != RegistryValueType::String)
+            throw Utils::Exception(L"Not a string value, type:%d", value.GetType());
 
         _value = value.GetValue();
     }
@@ -1201,8 +1292,8 @@ namespace System
 
     void RegistryExpandedStringValue::LoadRegString(const RegistryValue& value)
     {
-        if (value.GetType() != REG_EXPAND_SZ)
-            throw Utils::Exception(L"Not a multi-string value '%s'", value);
+        if (value.GetType() != RegistryValueType::ExpandString)
+            throw Utils::Exception(L"Not an expanded string value, type:%d", value.GetType());
 
         // ExpandEnvironmentStrings insted of PathUnExpandEnvStringsA
         //_value = value.GetValue();
@@ -1273,15 +1364,181 @@ namespace System
             }
 
             name.resize(wcslen(name.c_str()));
-            //_values[name] = RegistryValue(hkey, name.c_str());
             _values.emplace(name, RegistryValue(hkey, name.c_str()));
             index++;
         }
     }
 
-    const RegistryValues EnumRegistryValues::GetValues()
+    const RegistryValues EnumRegistryValues::GetValues() const
     {
         return _values;
+    }
+
+    // =================
+
+    ActivationContext::ActivationContext(const wchar_t* path)
+    {
+        ACTCTXW context = {};
+        context.cbSize = sizeof(context);
+        context.lpSource = path;
+
+        Handle::SetHandle(::CreateActCtxW(&context), &DestroyActivationContext);
+        
+        if (!Handle::IsValid())
+            throw Utils::Exception(::GetLastError(), L"CreateActCtxW() failed with code %d", ::GetLastError());
+    }
+
+    void ActivationContext::DestroyActivationContext(HANDLE object)
+    {
+        ::ReleaseActCtx(object);
+    }
+
+    // =================
+
+    ActivationContextRunLevel::ActivationContextRunLevel(ActivationContext& context)
+    {
+        ACTIVATION_CONTEXT_RUN_LEVEL_INFORMATION info;
+        SIZE_T written;
+
+        if (!::QueryActCtxW(0, context.GetNativeHandle(), NULL, RunlevelInformationInActivationContext, &info, sizeof(info), &written))
+            throw Utils::Exception(::GetLastError(), L"QueryActCtxW() failed with code %d", ::GetLastError());
+
+        _uiAccess = (info.UiAccess != 0);
+        switch (info.RunLevel)
+        {
+        case ACTCTX_RUN_LEVEL_UNSPECIFIED:
+            _runLevel = ActivationContextRunLevelType::Unspecified;
+            break;
+        case ACTCTX_RUN_LEVEL_AS_INVOKER:
+            _runLevel = ActivationContextRunLevelType::AsInvoker;
+            break;
+        case ACTCTX_RUN_LEVEL_HIGHEST_AVAILABLE:
+            _runLevel = ActivationContextRunLevelType::HighestAvailable;
+            break;
+        case ACTCTX_RUN_LEVEL_REQUIRE_ADMIN:
+            _runLevel = ActivationContextRunLevelType::RequireAdmin;
+            break;
+        default:
+            _runLevel = ActivationContextRunLevelType::Unknown;
+            break;
+        }
+    }
+
+    ActivationContextRunLevelType ActivationContextRunLevel::GetRunLevel() const
+    {
+        return _runLevel;
+    }
+
+    bool ActivationContextRunLevel::GetUIAccess() const
+    {
+        return _uiAccess;
+    }
+
+    // =================
+
+    Assembly::Assembly(std::wstring& assemblyDirID, std::vector<std::wstring>& assemblyFiles) :
+        _assemblyDirID(assemblyDirID),
+        _assemblyFiles(assemblyFiles)
+    {
+    }
+
+    const std::wstring& Assembly::GetID() const
+    {
+        return _assemblyDirID;
+    }
+
+    const std::vector<std::wstring>& Assembly::GetFiles() const
+    {
+        return _assemblyFiles;
+    }
+
+    // =================
+
+    ActivationContextAssemblies::ActivationContextAssemblies(ActivationContext& context)
+    {
+        std::vector<char> buffer(1024);
+
+        for (size_t i = 1; true; i++)
+        {
+            DWORD index = i + 1;
+            
+            if (!QueryAssembly(context, index, buffer))
+                break;
+
+            auto assemblyInfo = (PACTIVATION_CONTEXT_ASSEMBLY_DETAILED_INFORMATION)&buffer[0];
+
+            if (!assemblyInfo->lpAssemblyDirectoryName)
+                continue;
+
+            std::wstring assemblyDirName = assemblyInfo->lpAssemblyDirectoryName;
+            std::vector<std::wstring> assemblyFiles;
+
+            for (size_t a = 0; true; a++)
+            {
+                if (!QueryAssemblyFile(context, i, a, buffer))
+                    break;
+
+                auto fileInfo = (PASSEMBLY_FILE_DETAILED_INFORMATION)&buffer[0];
+                assemblyFiles.emplace_back(fileInfo->lpFileName);
+            }
+
+            _assemblies.emplace_back(assemblyDirName, assemblyFiles);
+        }
+    }
+
+    bool ActivationContextAssemblies::QueryAssembly(ActivationContext& context, DWORD index, std::vector<char>& buffer)
+    {
+        DWORD result = ERROR_SUCCESS;
+        SIZE_T written = 0;
+
+        if (!::QueryActCtxW(0, context.GetNativeHandle(), &index, AssemblyDetailedInformationInActivationContext, &buffer[0], buffer.size(), &written))
+        {
+            result = GetLastError();
+            if (result == ERROR_INSUFFICIENT_BUFFER)
+            {
+                auto newSize = buffer.size() * 2;
+
+                if (newSize >= written)
+                    buffer.resize(buffer.size() * 2);
+                else
+                    buffer.resize(written);
+
+                if (::QueryActCtxW(0, context.GetNativeHandle(), &index, AssemblyDetailedInformationInActivationContext, &buffer[0], buffer.size(), &written))
+                    result = ERROR_SUCCESS;
+                else
+                    result = GetLastError();
+            }
+        }
+
+        return (result == ERROR_SUCCESS);
+    }
+
+    bool ActivationContextAssemblies::QueryAssemblyFile(ActivationContext& context, DWORD index, DWORD fileIndex, std::vector<char>& buffer)
+    {
+        ACTIVATION_CONTEXT_QUERY_INDEX queryIndex = { index, fileIndex };
+        DWORD result = ERROR_SUCCESS;
+        SIZE_T written = 0;
+
+        if (!::QueryActCtxW(0, context.GetNativeHandle(), &queryIndex, FileInformationInAssemblyOfAssemblyInActivationContext, &buffer[0], buffer.size(), &written))
+        {
+            result = GetLastError();
+            if (result == ERROR_INSUFFICIENT_BUFFER)
+            {
+                auto newSize = buffer.size() * 2;
+
+                if (newSize >= written)
+                    buffer.resize(buffer.size() * 2);
+                else
+                    buffer.resize(written);
+
+                if (::QueryActCtxW(0, context.GetNativeHandle(), &queryIndex, FileInformationInAssemblyOfAssemblyInActivationContext, &buffer[0], buffer.size(), &written))
+                    result = ERROR_SUCCESS;
+                else
+                    result = GetLastError();
+            }
+        }
+
+        return (result == ERROR_SUCCESS);
     }
 
 };

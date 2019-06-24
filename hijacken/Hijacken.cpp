@@ -23,6 +23,8 @@ namespace
         if (command != L"/help" && command != L"/?")
             return false;
 
+        //TODO: usage
+
         return true;
     }
 
@@ -78,7 +80,7 @@ namespace
 int wmain(int argc, wchar_t* argv[])
 {
     SwitchConsoleToUTF16Mode();
-
+    
     try
     {
         Utils::Arguments arguments(argc, argv);
@@ -93,10 +95,10 @@ int wmain(int argc, wchar_t* argv[])
         command->LoadArgs(arguments);
         command->Perform();
     }
-    catch (Utils::Explanation& exception)
+    catch (Utils::Explanation& explanation)
     {
-        std::wcerr << exception.GetMessage() << std::endl;
-        return exception.GetCode();
+        std::wcerr << explanation.GetMessage() << std::endl;
+        return explanation.GetCode();
     }
     catch (Utils::Exception& exception)
     {

@@ -3,7 +3,7 @@
 
 namespace Commands
 {
-// =================
+    // =================
 
     ImpersonationOptions::ImpersonationOptions() :
         _tokenSourceProcessId(::GetCurrentProcessId()),
@@ -138,9 +138,9 @@ namespace Commands
         return L"Unknown";
     }
 
-// =================
+    // =================
 
-    SystemOptions::SystemOptions() : 
+    SystemOptions::SystemOptions() :
         _scanElevated(false)
     {
     }
@@ -166,11 +166,109 @@ namespace Commands
 
         System::Process process(targetProcessId, PROCESS_QUERY_INFORMATION);
         System::ImpersonateToken targetToken(process);
-        
+
         auto sourceIntegrity = token->GetIntegrityLevel();
         auto targetIntegrity = targetToken.GetIntegrityLevel();
 
         return (sourceIntegrity < targetIntegrity);
+    }
+
+    // =================
+
+    EnvironmentOptions::EnvironmentOptions() :
+        _envSource(EnvironmentSource::User),
+        _sourceProcessId(0)
+    {
+    }
+
+    void EnvironmentOptions::LoadArgs(Utils::Arguments& args)
+    {
+        std::wstring command;
+
+        if (!args.Probe(command))
+            return;
+
+        if (command != L"/environment")
+            return;
+
+        args.SwitchToNext();
+
+        if (!args.GetNext(command))
+            return;
+
+        if (command == L"system")
+        {
+            _envSource = EnvironmentSource::System;
+        }
+        else if (command == L"user")
+        {
+            _envSource = EnvironmentSource::User;
+        }
+        else if (command == L"process")
+        {
+            std::wstring param;
+
+            if (!args.GetNext(param))
+                throw Utils::Exception(L"Not enough arguments");//TODO
+
+            _sourceProcessId = _wtoi(param.c_str());
+            _envSource = EnvironmentSource::Process;
+        }
+        else if (command == L"inherit")
+        {
+            _envSource = EnvironmentSource::Inherit;
+        }
+        else if (command == L"off")
+        {
+            _envSource = EnvironmentSource::Off;
+        }
+        else
+        {
+            throw Utils::Exception(L"Invalid environment argument '%s'", command.c_str());
+        }
+    }
+
+    System::EnvironmentVariablesPtr EnvironmentOptions::GetEnvironment()
+    {
+        System::EnvironmentVariablesPtr env;
+
+        if (_envSource == EnvironmentSource::User)
+        {
+            System::EnumRegistryValues user(System::BaseKeys::CurrentUser, L"Environment");
+            System::EnumRegistryValues system(
+                System::BaseKeys::LocalMachine,
+                L"System\\CurrentControlSet\\Control\\Session Manager\\Environment"
+            );
+
+            auto vars = user.GetValues();
+            auto& sysVars = system.GetValues();
+            vars.insert(sysVars.begin(), sysVars.end());
+            env.reset(new System::EnvironmentVariables(vars));
+        }
+        else if (_envSource == EnvironmentSource::System)
+        {
+            System::EnumRegistryValues system(
+                System::BaseKeys::LocalMachine,
+                L"System\\CurrentControlSet\\Control\\Session Manager\\Environment"
+            );
+            env.reset(new System::EnvironmentVariables(system.GetValues()));
+        }
+        else if (_envSource == EnvironmentSource::Process)
+        {
+            System::ProcessInformation info(_sourceProcessId);
+            auto peb = info.GetProcessEnvironmentBlock();
+            env = peb->GetProcessEnvironment();
+        }
+        else if (_envSource == EnvironmentSource::Inherit)
+        {
+            env = System::ProcessInformation::GetCurrentEnvironmentVariables();
+        }
+        else if (_envSource == EnvironmentSource::Off)
+        {
+            env.reset(new System::EnvironmentVariables());
+        }
+
+        return env;
     }
 
 // =================
@@ -216,6 +314,8 @@ namespace Commands
             ImpersonationOptions::LoadArgs(args);
         }
 
+        EnvironmentOptions::LoadArgs(args);
+
         if (!args.GetNext(_filePath))
             throw Utils::Exception(L"Not enough arguments");
     }
@@ -225,11 +325,13 @@ namespace Commands
         auto token = ImpersonationOptions::CraftToken();
         System::TokenAccessChecker access(*token);
 
+        auto env = EnvironmentOptions::GetEnvironment();
+
         Engine::ImageScanEngine::SetOptionUnwindImport(_unwindImports);
         Engine::ImageScanEngine::SetOptionUnwindDelayLoadImport(_scanDelayLoad);
         Engine::ImageScanEngine::SetOptionAccessibleOnly(_checkAccess);
 
-        Engine::ImageScanEngine::Scan(_filePath, access);
+        Engine::ImageScanEngine::Scan(_filePath, *env, access);
     }
 
     void ScanFile::NotifyLoadImageOrder(Engine::LoadImageOrder& dirs)
@@ -240,8 +342,14 @@ namespace Commands
 
         int i = 0;
         for (auto& dir : dirs.GetOrder())
-            std::wcout << L" " << ++i << L". " << (dir.IsAccessible() ? L"A" : L" ") << " [" << ConvertImageDirTypeToString(dir.GetType()) << "] " << dir.GetPath() << std::endl;
+            std::wcout << L" " << ++i << L". " << ConvertImageDirStateToString(dir) << " [" << ConvertImageDirTypeToString(dir.GetType()) << "] " << dir.GetPath() << std::endl;
 
+        std::wcout << std::endl;
+
+        std::wcout << L" * attributes meaning:" << std::endl;
+        std::wcout << L"    N - directory doesn't exist" << std::endl;
+        std::wcout << L"    A - directory existing and accessible" << std::endl;
+        std::wcout << L"    O - a name of the directory is owned by a file, it should break an image loading when loader meets a file instead of directory" << std::endl;
 
         std::wcout << std::endl;
     }
@@ -292,6 +400,19 @@ namespace Commands
             break;
         }
         return L"Unknown";
+    }
+
+    const wchar_t* ScanFile::ConvertImageDirStateToString(const Engine::ImageDirectory& dir)
+    {
+        auto state = dir.GetState();
+        if (state == Engine::ImageDirectory::State::NotExisting)
+            return L"N";
+        else if (state == Engine::ImageDirectory::State::Overlapped)
+            return L"O";
+        else if (state == Engine::ImageDirectory::State::Existing && dir.IsAccessible())
+            return L"A";
+        
+        return L" ";
     }
 
 // =================

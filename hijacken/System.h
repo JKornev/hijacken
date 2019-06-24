@@ -94,8 +94,8 @@ namespace System
 
     // =================
 
-    class ProcessEnvironment;
-    typedef std::shared_ptr<ProcessEnvironment> ProcessEnvironmentPtr;
+    class EnvironmentVariables;
+    typedef std::shared_ptr<EnvironmentVariables> EnvironmentVariablesPtr;
 
     class ProcessEnvironmentBlock;
     typedef std::shared_ptr<ProcessEnvironmentBlock> ProcessEnvironmentBlockPtr;
@@ -105,7 +105,7 @@ namespace System
     class ProcessInformation
     {
     private:
-        
+
         ProcessPtr _process;
 
         PPEB                       _pebAddress;
@@ -125,6 +125,7 @@ namespace System
         void GetModulePath(HMODULE module, std::wstring& path);
 
         static Bitness GetCurrentProcessBitness();
+        static EnvironmentVariablesPtr GetCurrentEnvironmentVariables();
     };
 
     // =================
@@ -133,7 +134,7 @@ namespace System
     {
     private:
         ProcessPtr  _process;
-        
+
         std::string _pebBuffer;
         PPEB        _peb;
 
@@ -148,22 +149,9 @@ namespace System
     public:
         ProcessEnvironmentBlock(ProcessInformation& processInfo);
 
-        ProcessEnvironmentPtr GetProcessEnvironment();
+        EnvironmentVariablesPtr GetProcessEnvironment();
 
         void GetCurrentDir(std::wstring& directory);
-    };
-
-    // =================
-
-    class ProcessEnvironment
-    {
-    private:
-        std::map<std::wstring, std::wstring> _variables;
-
-    public:
-        ProcessEnvironment(std::wstring& environment);
-
-        bool GetValue(const wchar_t* key, std::wstring& output);
     };
 
     // =================
@@ -246,7 +234,7 @@ namespace System
     public:
         TokenAccessChecker(Process& process);
         TokenAccessChecker(ImpersonateToken& token);
-        
+
         bool IsFileObjectAccessible(SecurityDescriptor& descriptor, DWORD desiredAccess);
     };
 
@@ -278,7 +266,8 @@ namespace System
         static std::wstring BuildPath(const std::wstring& directory, const std::wstring& file);
         static void ExtractFileDirectory(const std::wstring& path, std::wstring& directory);
         static void NormalizePath(std::wstring& path);
-        static bool IsPathRelative(std::wstring& path);
+        static bool IsPathRelative(const std::wstring& path);
+        static bool PathExists(const std::wstring& path);
     };
 
     // =================
@@ -288,7 +277,7 @@ namespace System
     public:
         Directory(const wchar_t* path, DWORD access = READ_CONTROL, DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
 
-        static bool IsDirectory(const wchar_t* path);
+        static bool IsDirectory(const wchar_t* path); //TODO: move to directory utils
     };
 
     // =================
@@ -340,19 +329,38 @@ namespace System
 
     // =================
 
+    enum class RegistryValueType
+    {
+        None,
+        String,
+        ExpandString,
+        Binary,
+        Dword,
+        DwordBigEndian,
+        Link,
+        MultiString,
+        ResourceList,
+        FullResourceDescrition,
+        ResourceRequirementsList,
+        Qword,
+        Unknown
+    };
+
     class RegistryValue
     {
     private:
-        DWORD        _type;
-        std::wstring _value;
+        RegistryValueType _type;
+        std::wstring      _value;
+
+        RegistryValueType ConvertToRegistryType(DWORD type);
 
     public:
         RegistryValue(const RegistryKey& key, const wchar_t* value);
 
-        DWORD GetType() const;
+        RegistryValueType GetType() const;
         const std::wstring& GetValue() const;
     };
-    
+
     // =================
 
     class RegistryDwordValue
@@ -427,7 +435,88 @@ namespace System
     public:
         EnumRegistryValues(BaseKeys base, const wchar_t* key);
 
-        const RegistryValues GetValues();
+        const RegistryValues GetValues() const;
     };
 
+    // =================
+
+    class EnvironmentVariables
+    {
+    private:
+        std::map<std::wstring, std::wstring> _variables;
+
+    public:
+        EnvironmentVariables() = default;
+        EnvironmentVariables(LPWCH environment);
+        EnvironmentVariables(const std::wstring& environment);
+        EnvironmentVariables(const RegistryValues& values);
+
+        bool GetValue(const wchar_t* key, std::wstring& output) const;
+    };
+
+    // =================
+
+    class ActivationContext : public Handle
+    {
+    public:
+        ActivationContext(const wchar_t* path);
+
+    private:
+        static void DestroyActivationContext(HANDLE object);
+    };
+
+    // =================
+
+    enum class ActivationContextRunLevelType
+    {
+        Unspecified,
+        AsInvoker,
+        HighestAvailable,
+        RequireAdmin,
+        Unknown
+    };
+
+    class ActivationContextRunLevel
+    {
+    private:
+        ActivationContextRunLevelType _runLevel;
+        bool _uiAccess;
+
+    public:
+        ActivationContextRunLevel(ActivationContext& context);
+
+        ActivationContextRunLevelType GetRunLevel() const;
+        bool GetUIAccess() const;
+    };
+
+    // =================
+
+    class Assembly
+    {
+    private:
+        std::wstring _assemblyDirID;
+        std::vector<std::wstring> _assemblyFiles;
+
+    public:
+        Assembly(std::wstring& assemblyDirID, std::vector<std::wstring>& assemblyFiles);
+
+        const std::wstring& GetID() const;
+        const std::vector<std::wstring>& GetFiles() const;
+    };
+
+    // =================
+
+    class ActivationContextAssemblies
+    {
+    private:
+        std::vector<Assembly> _assemblies;
+
+    public:
+        ActivationContextAssemblies(ActivationContext& context);
+
+    private:
+        bool QueryAssembly(ActivationContext& context, DWORD index, std::vector<char>& buffer);
+        bool QueryAssemblyFile(ActivationContext& context, DWORD index, DWORD fileIndex, std::vector<char>& buffer);
+
+    };
 };
