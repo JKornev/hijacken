@@ -1,6 +1,7 @@
 #pragma once
 
 #include "System.h"
+#include "PEParser.h"
 #include <vector>
 #include <set>
 #include <unordered_set>
@@ -69,8 +70,10 @@ namespace Engine
 
         void SetWow64Mode(bool value);
 
-        const ImageDirectories& GetOrder();
+        const ImageDirectories& GetOrder() const;
+        const ImageDirectory& GetBaseDir() const;
         static bool IsSafeSearchEnabled();
+
 
     private:
         void LoadEnvironmentVariables(System::EnvironmentVariables& envVars, bool wow64mode, System::TokenAccessChecker& access);
@@ -128,17 +131,47 @@ namespace Engine
     class ActivationContextStack
     {
     private:
+        std::vector<System::ActivationContextAssemblies> _stack;
 
     public:
-        ActivationContextStack();
+        void Push(System::ActivationContext& context);
+        void Pop();
+
+        bool IsLibrarySxS(const std::wstring& dllName, std::wstring& sxsDir);
     };
 
     class LoadManifestAndPush
     {
+    public:
+        LoadManifestAndPush(System::ImageMapping& module, const std::wstring& imageDir, ActivationContextStack& stack);
+
+    private:
+        std::vector<char> ReadManifestFromResources(System::ImageMapping& module);
+        std::vector<char> NormalizeManifest(const std::vector<char>& manifest);
+        std::wstring SafeManifestToTempFile(const std::vector<char>& manifest);
+    };
+
+    // =================
+
+    class ImageScanContext
+    {
     private:
 
+        PEParser::ImagePtr          _image;
+        std::wstring                _imagePath;
+        std::wstring                _imageDir;
+        std::wstring                _imageFile;
+        System::Bitness             _bitness;
+
+        const ImageScanOrder&       _scanOrder;
+
+        const System::TokenAccessChecker& _accessCheck;
+        
+        ActivationContextStack      _actxStack;
+
     public:
-        LoadManifestAndPush(System::ImageMapping& image, ActivationContextStack& stack);
+        ImageScanContext(const std::wstring& imagePath, const ImageScanOrder& order, const System::TokenAccessChecker& access);
+
     };
 
     // =================
@@ -164,7 +197,11 @@ namespace Engine
     private:
 
         void ScanModule(std::wstring& dllName, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, ActivationContextStack& actxStack, System::TokenAccessChecker& access);
-        void ScanImports(std::wstring& dllPath, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, ActivationContextStack& actxStack, System::TokenAccessChecker& access);
+        void ScanImports(System::ImageMapping& module, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, ActivationContextStack& actxStack, System::TokenAccessChecker& access);
+        void PerformExistingModuleAction(std::wstring& dllName, ImageDirectory& dir, System::Bitness bitness, ImageScanOrder& order,
+            DllCache& scannedDlls, ActivationContextStack& actxStack, System::TokenAccessChecker& access);
+        void PerformNotExistingModuleAction(std::wstring& dllName, ImageDirectory& dir, ImageScanOrder& order);
+        void PerformSxSModuleAction(std::wstring& dllName, std::wstring& sxsDir, ImageScanOrder& order, System::TokenAccessChecker& access);
 
         std::vector<const ImageDirectory*> CollectVulnerableDirs(const ImageDirectory& last, ImageScanOrder& order);
 

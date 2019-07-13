@@ -15,6 +15,21 @@ namespace System
 
     // =================
 
+    class LastError
+    {
+    private:
+        DWORD _code;
+
+    public:
+        LastError();
+        
+        HANDLE Proxymize(HANDLE handle);
+
+        DWORD GetCode() const;
+    };
+
+    // =================
+
     class Handle : private std::shared_ptr<void>
     {
     public:
@@ -243,7 +258,11 @@ namespace System
     class File : public Handle
     {
     public:
-        File(const wchar_t* path, DWORD access = READ_CONTROL, DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+        File(const wchar_t* path , DWORD access = READ_CONTROL, DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, bool newFile = false);
+
+        void Write(void* buffer, size_t size);
+
+        void SetDeleteOnClose();
     };
 
     class ImageMapping : public Handle
@@ -265,9 +284,11 @@ namespace System
     public:
         static std::wstring BuildPath(const std::wstring& directory, const std::wstring& file);
         static void ExtractFileDirectory(const std::wstring& path, std::wstring& directory);
+        static void ExtractFileName(const std::wstring& path, std::wstring& name);
         static void NormalizePath(std::wstring& path);
         static bool IsPathRelative(const std::wstring& path);
         static bool PathExists(const std::wstring& path);
+        static File CreateTempFile(std::wstring& path, DWORD access = READ_CONTROL, DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
     };
 
     // =================
@@ -291,6 +312,7 @@ namespace System
         static std::wstring GetSysWow64Dir();
         static std::wstring GetSystemDir();
         static std::wstring GetWindowsDir();
+        static std::wstring GetTempDir();
     };
 
     class Wow64NoFsRedirection
@@ -459,7 +481,8 @@ namespace System
     class ActivationContext : public Handle
     {
     public:
-        ActivationContext(const wchar_t* path);
+        ActivationContext(const wchar_t* path, const wchar_t* assemblyDir = nullptr);
+        ActivationContext(ImageMapping& image);
 
     private:
         static void DestroyActivationContext(HANDLE object);
@@ -506,10 +529,10 @@ namespace System
 
     // =================
 
-    class ActivationContextAssemblies
+    class ActivationContextAssemblies : public std::vector<Assembly>
     {
     private:
-        std::vector<Assembly> _assemblies;
+        //std::vector<Assembly> _assemblies;
 
     public:
         ActivationContextAssemblies(ActivationContext& context);

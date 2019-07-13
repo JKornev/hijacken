@@ -116,6 +116,7 @@ int wmain(int argc, wchar_t* argv[])
     {
         std::wcerr << L"Unhandled exception, program has been terminated" << std::endl;
         std::wcerr << L" An internal error occured, there is no more information" << std::endl;
+        return Utils::NoExceptionCode;
     }
 
     return 0;

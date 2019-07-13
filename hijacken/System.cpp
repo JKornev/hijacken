@@ -12,6 +12,24 @@
 namespace System
 {
     // =================
+    
+    LastError::LastError() :
+        _code(::GetLastError())
+    {
+    }
+
+    HANDLE LastError::Proxymize(HANDLE handle)
+    {
+        _code = ::GetLastError();
+        return handle;
+    }
+
+    DWORD LastError::GetCode() const
+    {
+        return _code;
+    }
+
+    // =================
 
     Handle::Handle() :
         std::shared_ptr<void>(0, &ObjectDeleter)
@@ -815,11 +833,26 @@ namespace System
 
     // =================
 
-    File::File(const wchar_t* path, DWORD access, DWORD share) :
-        Handle(::CreateFileW(path, access, share, NULL, OPEN_EXISTING, 0, NULL))
+    File::File(const wchar_t* path, DWORD access, DWORD share, bool newFile) :
+        Handle(::CreateFileW(path, access, share, NULL, newFile ? OPEN_ALWAYS : OPEN_EXISTING, 0, NULL))
     {
         if (!Handle::IsValid())
             throw Utils::Exception(::GetLastError(), L"CreateFileW(file) failed with code %d", ::GetLastError());
+    }
+
+    void File::Write(void* buffer, size_t size)
+    {
+        DWORD written = 0;
+        if (!::WriteFile(Handle::GetNativeHandle(), buffer, size, &written, NULL))
+            throw Utils::Exception(::GetLastError(), L"WriteFile() failed with code %d", ::GetLastError());
+    }
+
+    void File::SetDeleteOnClose()
+    {
+        FILE_DISPOSITION_INFO info = {};
+        info.DeleteFileW = TRUE;
+        if (!::SetFileInformationByHandle(Handle::GetNativeHandle(), FileDispositionInfo, &info, sizeof(info)))
+            throw Utils::Exception(::GetLastError(), L"SetFileInformationByHandle() failed with code %d", ::GetLastError());
     }
 
     // =================
@@ -899,8 +932,17 @@ namespace System
         auto index = path.rfind('\\');
         if (index == std::wstring::npos)
             directory.clear();
-        else
+        else 
             directory = path.substr(0, index);
+    }
+
+    void FileUtils::ExtractFileName(const std::wstring& path, std::wstring& name)
+    {
+        auto index = path.rfind('\\');
+        if (index != std::wstring::npos && index + 1 <= path.size())
+            name = path.substr(index + 1);
+        else
+            name.clear();
     }
 
     void FileUtils::NormalizePath(std::wstring& path)
@@ -911,7 +953,7 @@ namespace System
         for (int i = 0; i < 5; i++)
         {
             wchar_t* output;
-            auto length = ::GetFullPathNameW(path.c_str(), buffer.size(), &buffer[0], &output);
+            auto length = ::GetFullPathNameW(path.c_str(), static_cast<DWORD>(buffer.size()), &buffer[0], &output);
             if (!length)
             {
                 throw Utils::Exception(L"GetFullPathNameW() failed with code %d", ::GetLastError());
@@ -936,6 +978,19 @@ namespace System
     bool FileUtils::PathExists(const std::wstring& path)
     {
         return !!::PathFileExistsW(path.c_str());
+    }
+
+    File FileUtils::CreateTempFile(std::wstring& path, DWORD access, DWORD share)
+    {
+        auto temp = SystemInformation::GetTempDir();
+        
+        wchar_t name[MAX_PATH] = {};
+        if (!::GetTempFileNameW(temp.c_str(), L"tmp", 0, name))
+            throw Utils::Exception(::GetLastError(), L"GetTempFileNameW() failed with code %d", ::GetLastError());
+
+        path = name;
+
+        return File(path.c_str(), access, share, true);
     }
 
     // =================
@@ -1020,6 +1075,16 @@ namespace System
         wchar_t buffer[MAX_PATH];
 
         if (!::GetWindowsDirectoryW(buffer, _countof(buffer)))
+            throw Utils::Exception(::GetLastError(), L"GetCurrentDirectoryW() failed with code %d", ::GetLastError());
+
+        return buffer;
+    }
+
+    std::wstring SystemInformation::GetTempDir()
+    {
+        wchar_t buffer[MAX_PATH];
+
+        if (!::GetTempPathW(_countof(buffer), buffer))
             throw Utils::Exception(::GetLastError(), L"GetCurrentDirectoryW() failed with code %d", ::GetLastError());
 
         return buffer;
@@ -1306,7 +1371,7 @@ namespace System
             auto result = ::ExpandEnvironmentStringsW(
                 unexpanded.c_str(),
                 const_cast<wchar_t*>(_value.c_str()),
-                _value.size()
+                static_cast<DWORD>(_value.size())
             );
             if (result)
             {
@@ -1338,7 +1403,7 @@ namespace System
         {
             name.resize(0x100);
 
-            DWORD nameSize = name.size(), nameType;
+            DWORD nameSize = static_cast<DWORD>(name.size()), nameType;
             auto result = ::RegEnumValueW(
                 hkey.GetNativeHKEY(), 
                 index,
@@ -1376,16 +1441,37 @@ namespace System
 
     // =================
 
-    ActivationContext::ActivationContext(const wchar_t* path)
+    ActivationContext::ActivationContext(const wchar_t* path, const wchar_t* assemblyDir)
     {
         ACTCTXW context = {};
         context.cbSize = sizeof(context);
         context.lpSource = path;
 
-        Handle::SetHandle(::CreateActCtxW(&context), &DestroyActivationContext);
-        
+        if (assemblyDir)
+        {
+            context.lpAssemblyDirectory = assemblyDir;
+            context.dwFlags = ACTCTX_FLAG_ASSEMBLY_DIRECTORY_VALID;
+        }
+
+        LastError lastError;
+        Handle::SetHandle(lastError.Proxymize(::CreateActCtxW(&context)), &DestroyActivationContext);
+
         if (!Handle::IsValid())
-            throw Utils::Exception(::GetLastError(), L"CreateActCtxW() failed with code %d", ::GetLastError());
+            throw Utils::Exception(lastError.GetCode(), L"CreateActCtxW() failed with code %d", lastError.GetCode());
+    }
+
+    ActivationContext::ActivationContext(ImageMapping& image)
+    {
+        ACTCTXA context = {};
+        context.cbSize = sizeof(context);
+        context.dwFlags = ACTCTX_FLAG_HMODULE_VALID;
+        context.hModule = reinterpret_cast<HMODULE>(image.GetAddress());
+
+        LastError lastError;
+        Handle::SetHandle(lastError.Proxymize(::CreateActCtxA(&context)), &DestroyActivationContext);
+
+        if (!Handle::IsValid())
+            throw Utils::Exception(lastError.GetCode(), L"CreateActCtxW() failed with code %d", lastError.GetCode());
     }
 
     void ActivationContext::DestroyActivationContext(HANDLE object)
@@ -1458,9 +1544,9 @@ namespace System
     {
         std::vector<char> buffer(1024);
 
-        for (size_t i = 1; true; i++)
+        for (unsigned long i = 1; true; i++)
         {
-            DWORD index = i + 1;
+            auto index = i + 1;
             
             if (!QueryAssembly(context, index, buffer))
                 break;
@@ -1473,7 +1559,7 @@ namespace System
             std::wstring assemblyDirName = assemblyInfo->lpAssemblyDirectoryName;
             std::vector<std::wstring> assemblyFiles;
 
-            for (size_t a = 0; true; a++)
+            for (unsigned long a = 0; true; a++)
             {
                 if (!QueryAssemblyFile(context, i, a, buffer))
                     break;
@@ -1482,7 +1568,7 @@ namespace System
                 assemblyFiles.emplace_back(fileInfo->lpFileName);
             }
 
-            _assemblies.emplace_back(assemblyDirName, assemblyFiles);
+            emplace_back(assemblyDirName, assemblyFiles);
         }
     }
 
