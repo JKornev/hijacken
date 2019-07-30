@@ -47,13 +47,13 @@ namespace System
             ::CloseHandle(object);
     }
 
-    bool Handle::IsValid()
+    bool Handle::IsValid() const
     {
         auto object = get();
         return (object && object != INVALID_HANDLE_VALUE);
     }
 
-    HANDLE Handle::GetNativeHandle()
+    HANDLE Handle::GetNativeHandle() const
     {
         return get();
     }
@@ -808,7 +808,7 @@ namespace System
     {
     }
 
-    bool TokenAccessChecker::IsFileObjectAccessible(SecurityDescriptor& descriptor, DWORD desiredAccess)
+    bool TokenAccessChecker::IsFileObjectAccessible(SecurityDescriptor& descriptor, DWORD desiredAccess) const
     {
         BOOL accessStatus = FALSE;
         GENERIC_MAPPING mapping = {};
@@ -1462,16 +1462,29 @@ namespace System
 
     ActivationContext::ActivationContext(ImageMapping& image)
     {
-        ACTCTXA context = {};
+        ACTCTXW context = {};
         context.cbSize = sizeof(context);
         context.dwFlags = ACTCTX_FLAG_HMODULE_VALID;
         context.hModule = reinterpret_cast<HMODULE>(image.GetAddress());
 
         LastError lastError;
-        Handle::SetHandle(lastError.Proxymize(::CreateActCtxA(&context)), &DestroyActivationContext);
+        Handle::SetHandle(lastError.Proxymize(::CreateActCtxW(&context)), &DestroyActivationContext);
 
         if (!Handle::IsValid())
             throw Utils::Exception(lastError.GetCode(), L"CreateActCtxW() failed with code %d", lastError.GetCode());
+    }
+
+    ActivationContext::ActivationContext(bool loadDefault)
+    {
+        HANDLE context = nullptr;
+
+        if (!loadDefault && !::GetCurrentActCtx(&context))
+            throw Utils::Exception(::GetLastError(), L"GetCurrentActCtx() failed with code %d", ::GetLastError());
+
+        // A default activation context might be NULL
+
+        if (context)
+            Handle::SetHandle(context, &DestroyActivationContext);
     }
 
     void ActivationContext::DestroyActivationContext(HANDLE object)
@@ -1627,4 +1640,64 @@ namespace System
         return (result == ERROR_SUCCESS);
     }
 
+    // =================
+
+    ApplyDefaultSystemActivationContext::ApplyDefaultSystemActivationContext() :
+        ActivationContext(true),
+        _cookie(0)
+    {
+        if (!::ActivateActCtx(Handle::GetNativeHandle(), &_cookie))
+            throw Utils::Exception(::GetLastError(), L"ActivateActCtx() failed with code %d", ::GetLastError());
+    }
+
+    ApplyDefaultSystemActivationContext::~ApplyDefaultSystemActivationContext()
+    {
+        if (!::DeactivateActCtx(0, _cookie))
+            throw Utils::Exception(::GetLastError(), L"DeactivateActCtx() failed with code %d", ::GetLastError());
+    }
+
+    // =================
+
+    std::wstring ActivationContextUtils::LookupSxSDirUsingDefaultSystemActivationContext(const std::wstring& dll)
+    {
+        //TODO: move it to NTLib
+        static NTSTATUS (NTAPI*RtlDosApplyFileIsolationRedirection_Ustr)(
+            DWORD Flags,
+            IN PUNICODE_STRING OriginalName,
+            IN PUNICODE_STRING Extension,
+            IN OUT PUNICODE_STRING StaticString,
+            IN OUT PUNICODE_STRING DynamicString,
+            IN OUT PUNICODE_STRING *NewName,
+            IN PULONG NewFlags,
+            IN PSIZE_T FileNameSize,
+            IN PSIZE_T RequiredLength) = 0;
+
+        if (!RtlDosApplyFileIsolationRedirection_Ustr)
+            *(FARPROC*)&RtlDosApplyFileIsolationRedirection_Ustr = ::GetProcAddress(
+                ::GetModuleHandle(L"ntdll.dll"), 
+                "RtlDosApplyFileIsolationRedirection_Ustr"
+            );
+        if (!RtlDosApplyFileIsolationRedirection_Ustr)
+            throw Utils::Exception(L"Default system activation context query is unsupported");
+
+        ApplyDefaultSystemActivationContext defaultContext;
+        
+        UNICODE_STRING dllName, staticString;
+        PUNICODE_STRING newName;
+        wchar_t buffer[MAX_PATH] = {};
+        ULONG newFlags;
+        SIZE_T newSize, required;
+
+        ::RtlInitUnicodeString(&dllName, const_cast<wchar_t*>(dll.c_str()));
+        
+        staticString.Length = 0;
+        staticString.MaximumLength = sizeof(buffer) - sizeof(wchar_t);
+        staticString.Buffer = buffer;
+
+        auto status = RtlDosApplyFileIsolationRedirection_Ustr(1, &dllName, NULL, &staticString, NULL, &newName, &newFlags, &newSize, &required);
+        if (!NT_SUCCESS(status))
+            throw Utils::Exception(status, L"RtlDosApplyFileIsolationRedirection_Ustr() failed with code %08X", status);
+
+        return std::wstring(staticString.Buffer);
+    }
 };

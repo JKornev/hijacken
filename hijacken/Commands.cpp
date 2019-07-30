@@ -378,6 +378,20 @@ namespace Commands
         std::wcout << std::endl;
     }
 
+    void ScanFile::NotifyVulnerableSxSDll(Engine::ImageDirectory& dir, std::wstring& dll, bool writtable)
+    {
+        if (!_firstFound)
+        {
+            _firstFound = true;
+            std::wcout << L"Vulnerable DLLs:" << std::endl << std::endl;
+        }
+
+        std::wcout << L" " << dll << (writtable ? L", is writable" : L"") << std::endl;
+        std::wcout << L"  Type: " << ConvertImageDirTypeToString(dir.GetType()) << std::endl;
+        std::wcout << L"  Vulnerable dir: " << std::endl << L"    " << dir.GetPath() << std::endl;
+        std::wcout << std::endl;
+    }
+
     const wchar_t* ScanFile::ConvertImageDirTypeToString(Engine::ImageDirectory::Type type)
     {
         switch (type)
@@ -396,6 +410,8 @@ namespace Commands
             return L"Environment";
         case Engine::ImageDirectory::Type::FullPath:
             return L"FullPath";
+        case Engine::ImageDirectory::Type::SxS:
+            return L"Side-by-Side";
         default:
             break;
         }

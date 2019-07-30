@@ -42,9 +42,9 @@ namespace System
         Handle();
         Handle(HANDLE object, DestroyObjectRoutine destroyer = &ObjectDeleter);
 
-        bool IsValid();
+        bool IsValid() const;
 
-        HANDLE GetNativeHandle();
+        HANDLE GetNativeHandle() const;
 
     protected:
 
@@ -250,7 +250,7 @@ namespace System
         TokenAccessChecker(Process& process);
         TokenAccessChecker(ImpersonateToken& token);
 
-        bool IsFileObjectAccessible(SecurityDescriptor& descriptor, DWORD desiredAccess);
+        bool IsFileObjectAccessible(SecurityDescriptor& descriptor, DWORD desiredAccess) const;
     };
 
     // =================
@@ -483,6 +483,7 @@ namespace System
     public:
         ActivationContext(const wchar_t* path, const wchar_t* assemblyDir = nullptr);
         ActivationContext(ImageMapping& image);
+        ActivationContext(bool loadDefault = false);
 
     private:
         static void DestroyActivationContext(HANDLE object);
@@ -541,5 +542,24 @@ namespace System
         bool QueryAssembly(ActivationContext& context, DWORD index, std::vector<char>& buffer);
         bool QueryAssemblyFile(ActivationContext& context, DWORD index, DWORD fileIndex, std::vector<char>& buffer);
 
+    };
+
+    // =================
+
+    class ApplyDefaultSystemActivationContext : protected ActivationContext
+    {
+    private:
+        ULONG_PTR _cookie;
+    public:
+        ApplyDefaultSystemActivationContext();
+        ~ApplyDefaultSystemActivationContext();
+    };
+
+    // =================
+
+    class ActivationContextUtils
+    {
+    public:
+        static std::wstring LookupSxSDirUsingDefaultSystemActivationContext(const std::wstring& dll);
     };
 };

@@ -13,7 +13,7 @@ namespace Engine
     {
     }
 
-    ImageDirectory::ImageDirectory(Type type, std::wstring& imageDir, System::TokenAccessChecker& access) :
+    ImageDirectory::ImageDirectory(Type type, const std::wstring& imageDir, const System::TokenAccessChecker& access) :
         _directory(imageDir),
         _accessible(false),
         _type(type),
@@ -72,13 +72,13 @@ namespace Engine
 
     // =================
 
-    LoadImageOrder::LoadImageOrder(std::wstring& imageDir, std::wstring& currentDir, System::EnvironmentVariables& envVars, System::TokenAccessChecker& access) :
+    LoadImageOrder::LoadImageOrder(const std::wstring& imageDir, const std::wstring& currentDir, const System::EnvironmentVariables& envVars, const System::TokenAccessChecker& access) :
         _wow64mode(false)
     {
         auto supportWow64 = (System::SystemInformation::GetSystemBitness() == System::Bitness::Arch64);
         bool safeSearch = IsSafeSearchEnabled();
 
-        auto putDirectory = [&](ImageDirectory::Type type, std::wstring& dir)
+        auto putDirectory = [&](ImageDirectory::Type type, const std::wstring& dir)
         {
             _order.emplace_back(type, dir, access);
             if (supportWow64)
@@ -163,7 +163,7 @@ namespace Engine
         return enabled;
     }
 
-    void LoadImageOrder::LoadEnvironmentVariables(System::EnvironmentVariables& envVars, bool wow64mode, System::TokenAccessChecker& access)
+    void LoadImageOrder::LoadEnvironmentVariables(const System::EnvironmentVariables& envVars, bool wow64mode, const System::TokenAccessChecker& access)
     {
         std::wstring rawPaths;
 
@@ -185,12 +185,12 @@ namespace Engine
 
     // =================
 
-    ImageScanOrder::ImageScanOrder(std::wstring& imageDir, std::wstring& currentDir, System::EnvironmentVariables& envVars, System::TokenAccessChecker& access) :
+    ImageScanOrder::ImageScanOrder(const std::wstring& imageDir, const std::wstring& currentDir, const System::EnvironmentVariables& envVars, const System::TokenAccessChecker& access) :
         LoadImageOrder(imageDir, currentDir, envVars, access)
     {
     }
 
-    ImageDirectory ImageScanOrder::FindDllDirectory(std::wstring& dllname)
+    ImageDirectory ImageScanOrder::FindDllDirectory(const std::wstring& dllname) const
     {
         auto dirs = LoadImageOrder::GetOrder();
 
@@ -201,7 +201,7 @@ namespace Engine
         return ImageDirectory();
     }
 
-    bool ImageScanOrder::DirContainsDll(std::wstring& dllname, ImageDirectory& dir)
+    bool ImageScanOrder::DirContainsDll(const std::wstring& dllname, ImageDirectory& dir) const
     {
         auto path = System::FileUtils::BuildPath(
             dir.GetPath(),
@@ -338,7 +338,7 @@ namespace Engine
     bool ActivationContextStack::IsLibrarySxS(const std::wstring& dllName, std::wstring& sxsDir)
     {
         if (!_stack.size())
-            return false;
+            return IsLibrarySxSInDefaultActx(dllName, sxsDir);
 
         const auto& assemblies = *_stack.rbegin();
         for (const auto& assembly : assemblies)
@@ -349,7 +349,41 @@ namespace Engine
                     return true;
                 }
 
-        return false;
+        return IsLibrarySxSInDefaultActx(dllName, sxsDir);
+    }
+
+    bool ActivationContextStack::IsLibrarySxSInDefaultActx(const std::wstring& dllName, std::wstring& sxsDir)
+    {
+        try
+        {
+            //TODO: 
+            //  Unfortunately results are not valid if a scanned DLL has different architecture to hijacken
+            //  because it's not possible to get a Default System Activateion Context for different architecture
+
+            auto dll = System::ActivationContextUtils::LookupSxSDirUsingDefaultSystemActivationContext(dllName);
+
+            if (dll.empty())
+                return false;
+
+            std::wstring assemblyDir;
+            System::FileUtils::ExtractFileDirectory(dll, assemblyDir);
+            std::transform(assemblyDir.begin(), assemblyDir.end(), assemblyDir.begin(), ::tolower);
+
+            auto winsxs = System::SystemInformation::GetWindowsDir();
+            winsxs += L"\\winsxs";
+            std::transform(winsxs.begin(), winsxs.end(), winsxs.begin(), ::tolower);
+
+            if (assemblyDir.find(winsxs) != 0)
+                return false;
+
+            System::FileUtils::ExtractFileName(assemblyDir, sxsDir);
+        }
+        catch (...)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     // =================
@@ -405,19 +439,63 @@ namespace Engine
 
     // =================
 
-    ImageScanContext::ImageScanContext(const std::wstring& imagePath, const ImageScanOrder& order, const System::TokenAccessChecker& access) :
+    ImageScanContext::ImageScanContext(const std::wstring& imagePath, const System::TokenAccessChecker& access) :
         _imagePath(imagePath),
-        _scanOrder(order),
-        _accessCheck(access)
+        _accessChecker(access)
     {
         System::FileUtils::NormalizePath(_imagePath);
         System::FileUtils::ExtractFileDirectory(_imagePath, _imageDir);
         System::FileUtils::ExtractFileName(_imagePath, _imageFile);
 
-        System::ImageMapping mapping(_imagePath.c_str());
+        _image.reset(new System::ImageMapping(_imagePath.c_str()));
         PEParser::ImageFactory factory;
-        _image = factory.GetImage(mapping);
-        _bitness = _image->GetBitness();
+        _parser = factory.GetImage(*_image);
+        _bitness = _parser->GetBitness();
+    }
+
+    System::ImageMapping ImageScanContext::GetAppImage() const
+    {
+        return *_image;
+    }
+
+    const PEParser::ImagePtr ImageScanContext::GetAppParser() const
+    {
+        return _parser;
+    }
+
+    const std::wstring& ImageScanContext::GetAppPath() const
+    {
+        return _imagePath;
+    }
+
+    const std::wstring& ImageScanContext::GetAppDirectory() const
+    {
+        return _imageDir;
+    }
+
+    const std::wstring& ImageScanContext::GetAppFileName() const
+    {
+        return _imageFile;
+    }
+
+    System::Bitness ImageScanContext::GetAppBitness() const
+    {
+        return _bitness;
+    }
+
+    DllCache& ImageScanContext::GetDllsCache()
+    {
+        return _scannedDlls;
+    }
+
+    const System::TokenAccessChecker& ImageScanContext::GetAccessChecker() const
+    {
+        return _accessChecker;
+    }
+
+    ActivationContextStack& ImageScanContext::GetActivationContextStack()
+    {
+        return _actxStack;
     }
 
     // =================
@@ -439,45 +517,36 @@ namespace Engine
 
     void ImageScanEngine::Scan(std::wstring& imagePath, System::EnvironmentVariables& envVars, System::TokenAccessChecker& access)
     {
-        std::wstring normalized(imagePath);
-        System::FileUtils::NormalizePath(normalized);
-
-        std::wstring filename;
-        System::FileUtils::ExtractFileName(normalized, filename);
-
-        System::ImageMapping mapping(normalized.c_str());
-        PEParser::ImageFactory factory;
-        auto image = factory.GetImage(mapping);
-        auto bitness = image->GetBitness();
+        ImageScanContext context(imagePath, access);
 
         bool wow64mode = false;
-        if (System::SystemInformation::GetSystemBitness() == System::Bitness::Arch64 && bitness == System::Bitness::Arch32)
+        if (System::SystemInformation::GetSystemBitness() == System::Bitness::Arch64 && context.GetAppBitness() == System::Bitness::Arch32)
             wow64mode = true;
-
-        std::wstring imageDir;
-        System::FileUtils::ExtractFileDirectory(normalized, imageDir);
 
         //TODO: don't need to calculate order each time scan started,
         //      in other way we can calculate it on constructor and
         //      change an image dir or current dir before we start a
         //      scan.
-        ImageScanOrder order(imageDir, imageDir, envVars, access);
+        ImageScanOrder order(context.GetAppDirectory(), context.GetAppDirectory(), envVars, context.GetAccessChecker());
         order.SetWow64Mode(wow64mode);
         NotifyLoadImageOrder(order);
 
-        // Load SxS
-        ActivationContextStack actxStack;
-        LoadManifestAndPush appManifest(mapping, imageDir, actxStack);
+        //TODO: do we really need to open mapping again? context already did it
+        System::ImageMapping mapping(context.GetAppPath().c_str());
+        LoadManifestAndPush appManifest(mapping, context.GetAppDirectory(), context.GetActivationContextStack());
 
-        // Scan initial import table
-        DllCache scannedDlls;
-        ScanImports(mapping, bitness, order, scannedDlls, actxStack, access);
+        ScanImports(context.GetAppImage(), context, order);
     }
 
-    void ImageScanEngine::ScanModule(std::wstring& dllName, System::Bitness bitness, ImageScanOrder& order, DllCache& scannedDlls, ActivationContextStack& actxStack, System::TokenAccessChecker& access)
+    void ImageScanEngine::ScanModule(ImageScanContext& context, std::wstring& dllName, ImageScanOrder& order)
     {
         try
         {
+            auto actxStack   = context.GetActivationContextStack();
+            auto scannedDlls = context.GetDllsCache();
+            auto access      = context.GetAccessChecker();
+            auto bitness     = context.GetAppBitness();
+
             std::transform(dllName.begin(), dllName.end(), dllName.begin(), towlower);
 
             std::wstring sxsDir;
@@ -490,8 +559,7 @@ namespace Engine
                 // Therefore we put to the dll cache a dll name with SxS directory, for examples above it would be:
                 //     x86_microsoft.windows.common-controls_6595b64144ccf1df_5.82.7601.18837_none_ec86b8d6858ec0bc\comctl32.dll
                 //     x86_microsoft.windows.common-controls_6595b64144ccf1df_6.0.7601.24460_none_2b1e532a457961ba\comctl32.dll
-                //TODO: check this fix
-
+                
                 std::wstring cached = sxsDir;
                 cached += L"\\";
                 cached += dllName;
@@ -499,21 +567,25 @@ namespace Engine
                 if (!scannedDlls.InsertOnlyNew(cached))
                     return;
 
-                PerformSxSModuleAction(dllName, sxsDir, order, access);
+                //TODO: known DLLs have a priority over SxS?
+
+                PerformSxSModuleAction(context, dllName, sxsDir, order);
             }
-
-            if (!scannedDlls.InsertOnlyNew(dllName))
-                return;
-
-            if (_knownDlls.Contain(dllName, bitness))
-                return;
-
-            auto dir = order.FindDllDirectory(dllName);
-
-            if (dir.GetType() == ImageDirectory::Type::Unknown)
-                PerformNotExistingModuleAction(dllName, dir, order);
             else
-                PerformExistingModuleAction(dllName, dir, bitness, order, scannedDlls, actxStack, access);
+            {
+                if (!scannedDlls.InsertOnlyNew(dllName))
+                    return;
+
+                if (_knownDlls.Contain(dllName, bitness))
+                    return;
+
+                auto dir = order.FindDllDirectory(dllName);
+
+                if (dir.GetType() == ImageDirectory::Type::Unknown)
+                    PerformNotExistingModuleAction(context, dllName, dir, order);
+                else
+                    PerformExistingModuleAction(context, dllName, dir, order);
+            }
         }
         catch (Utils::Exception& e)
         {
@@ -521,19 +593,16 @@ namespace Engine
         }
     }
 
-
-    void ImageScanEngine::ScanImports(
-        System::ImageMapping& module, 
-        System::Bitness bitness, 
-        ImageScanOrder& order, 
-        DllCache& scannedDlls, 
-        ActivationContextStack& actxStack, 
-        System::TokenAccessChecker& access)
+    void ImageScanEngine::ScanImports(System::ImageMapping& module, ImageScanContext& context, ImageScanOrder& order)
     {
         PEParser::ImageFactory factory;
         auto image = factory.GetImage(module);
+        ScanImports(image, context, order);
+    }
 
-        if (image->GetBitness() != bitness)
+    void ImageScanEngine::ScanImports(const PEParser::ImagePtr& image, ImageScanContext& context, ImageScanOrder& order)
+    {
+        if (image->GetBitness() != context.GetAppBitness())
             throw Utils::Exception(L"Image bitness mismatched");
 
         auto imports = image->LoadImportTable();
@@ -546,81 +615,91 @@ namespace Engine
                 continue;
             }
 
-            ScanModule(std::wstring(import.begin(), import.end()), bitness, order, scannedDlls, actxStack, access);
+            ScanModule(context, std::wstring(import.begin(), import.end()), order);
         }
     }
 
-    void ImageScanEngine::PerformExistingModuleAction(
-        std::wstring& dllName,
-        ImageDirectory& dir, 
-        System::Bitness bitness, 
-        ImageScanOrder& order, 
-        DllCache& scannedDlls, 
-        ActivationContextStack& actxStack, 
-        System::TokenAccessChecker& access)
+    void ImageScanEngine::PerformExistingModuleAction(ImageScanContext& context, std::wstring& dllName, ImageDirectory& dir, ImageScanOrder& order)
     {
         auto dllPath = System::FileUtils::BuildPath(dir.GetPath(), dllName);
-
-        System::ImageMapping mapping(dllPath.c_str());
-        LoadManifestAndPush dllManifest(mapping, dir.GetPath(), actxStack);
 
         auto vulnerableDirs = CollectVulnerableDirs(dir, order);
 
         bool writtable = false;
-        if (_checkAccessible && IsFileWritable(dllPath, access))
+        if (_checkAccessible && IsFileWritable(dllPath, context.GetAccessChecker()))
             writtable = true;
 
-        if (dir.GetType() != ImageDirectory::Type::Base)
+        if (dir.GetType() != ImageDirectory::Type::Base && !vulnerableDirs.empty())
             NotifyVulnerableDll(dir, dllName, writtable, vulnerableDirs);
         else if (dir.GetType() == ImageDirectory::Type::Base && writtable)
             NotifyVulnerableDll(dir, dllName, true, vulnerableDirs);
 
         if (_unwindImports)
-            ScanImports(mapping, bitness, order, scannedDlls, actxStack, access);
+        {
+            System::ImageMapping mapping(dllPath.c_str());
+            LoadManifestAndPush dllManifest(mapping, dir.GetPath(), context.GetActivationContextStack());
+            ScanImports(mapping, context, order);
+        }
     }
 
-    void ImageScanEngine::PerformNotExistingModuleAction(std::wstring& dllName, ImageDirectory& dir, ImageScanOrder& order)
+    void ImageScanEngine::PerformNotExistingModuleAction(ImageScanContext& context, std::wstring& dllName, ImageDirectory& dir, ImageScanOrder& order)
     {
         auto vulnerableDirs = CollectVulnerableDirs(dir, order);
         NotifyVulnerableDll(dir, dllName, false, vulnerableDirs);
     }
 
-    void ImageScanEngine::PerformSxSModuleAction(std::wstring& dllName, std::wstring& sxsDir, ImageScanOrder& order, System::TokenAccessChecker& access)
+    void ImageScanEngine::PerformSxSModuleAction(ImageScanContext& context, std::wstring& dllName, std::wstring& sxsDir, ImageScanOrder& order)
     {
-        //auto base = order.GetBaseDir();
-        //auto sxsLocal = base.GetPath();
-        
-        std::wstring appLocal = L"\\";
-        appLocal += L"APPNAME";//TODO: application name
-        appLocal += L".Local";
-        //TODO: check existing if not so create
-
-        std::wstring sxsLocal = appLocal;
-        sxsLocal += L"\\";
-        sxsLocal += sxsDir;
-        //TODO: check existing if not so create
-
-
-
-        /*if (!System::FileUtils::PathExists(_directory.c_str()))
-        {
-            _state = State::NotExisting;
-            return;
-        }
-
-        if (!System::Directory::IsDirectory(_directory.c_str()))
-            _state = State::Overlapped;
-
-        System::Directory directory(_directory.c_str());
-        System::SecurityDescriptor descriptor(directory);
-        _accessible = access.IsFileObjectAccessible(descriptor, FILE_ADD_FILE);*/
-
-        // TODO:
+        // Initial Plan:
         //   0. Push SxS 
         //   1. Get base dir
         //   2. Check is it possible to create App.exe.Local or it already existing and writable
         //   3. If detected notify SxS callback
         //   4. Unwind if it's enabled
+
+        std::vector<const ImageDirectory*> vulnerableDirs;
+        auto base = order.GetBaseDir();
+
+        auto sxsLocal = base.GetPath();
+        sxsLocal += L"\\";
+        sxsLocal += context.GetAppFileName();
+        sxsLocal += L".Local\\";
+        sxsLocal += sxsDir;
+
+        ImageDirectory sxsLocalDir(ImageDirectory::Type::SxS, sxsLocal, context.GetAccessChecker());
+
+        if (_checkAccessible)
+        {
+            // 1. Can create Local dir
+            // 2. Can overwrite local file
+            auto baseDir = base.GetPath();
+            auto dllPath = System::FileUtils::BuildPath(sxsLocal, dllName);
+            if (System::FileUtils::PathExists(dllPath) && IsFileWritable(dllPath, context.GetAccessChecker()))
+                NotifyVulnerableSxSDll(sxsLocalDir, dllName, true);
+            else if (System::FileUtils::PathExists(baseDir) && IsDirectoryWritable(baseDir, context.GetAccessChecker()))
+                NotifyVulnerableSxSDll(sxsLocalDir, dllName, false);
+        }
+
+        auto sxsGlobal = System::SystemInformation::GetWindowsDir();
+        sxsGlobal += L"\\WinSxS\\";
+        sxsGlobal += sxsDir;
+
+        ImageDirectory sxsGlobalDir(ImageDirectory::Type::SxS, sxsGlobal, context.GetAccessChecker());
+        auto sxsPath = System::FileUtils::BuildPath(sxsGlobal, dllName);
+
+        if (_checkAccessible)
+        {
+            // 3. Can overwrite public file
+            if (IsFileWritable(sxsPath, context.GetAccessChecker()))
+                NotifyVulnerableSxSDll(sxsGlobalDir, dllName, true);
+        }
+
+        if (_unwindImports)
+        {
+            System::ImageMapping mapping(sxsPath.c_str());
+            LoadManifestAndPush dllManifest(mapping, sxsGlobalDir.GetPath(), context.GetActivationContextStack());
+            ScanImports(mapping, context, order);
+        }
     }
 
     std::vector<const ImageDirectory*> ImageScanEngine::CollectVulnerableDirs(const ImageDirectory& last, ImageScanOrder& order)
@@ -656,10 +735,22 @@ namespace Engine
         // Stub, does nothing here
     }
 
-    bool ImageScanEngine::IsFileWritable(std::wstring& path, System::TokenAccessChecker& access)
+    void ImageScanEngine::NotifyVulnerableSxSDll(ImageDirectory& dir, std::wstring& dll, bool writtable)
+    {
+        // Stub, does nothing here
+    }
+
+    bool ImageScanEngine::IsFileWritable(const std::wstring& path, const System::TokenAccessChecker& access)
     {
         System::File file(path.c_str());
         System::SecurityDescriptor descriptor(file);
         return access.IsFileObjectAccessible(descriptor, FILE_WRITE_DATA);
+    }
+
+    bool ImageScanEngine::IsDirectoryWritable(const std::wstring& path, const System::TokenAccessChecker& access)
+    {
+        System::Directory dir(path.c_str());
+        System::SecurityDescriptor descriptor(dir);
+        return access.IsFileObjectAccessible(descriptor, FILE_ADD_SUBDIRECTORY);
     }
 };
