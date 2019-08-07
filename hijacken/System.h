@@ -289,6 +289,8 @@ namespace System
         static bool IsPathRelative(const std::wstring& path);
         static bool PathExists(const std::wstring& path);
         static File CreateTempFile(std::wstring& path, DWORD access = READ_CONTROL, DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+        static std::wstring ApplyWow64Redirection(const std::wstring& path);
+        static std::wstring FindFirstMatchedFile(const std::wstring& path);
     };
 
     // =================

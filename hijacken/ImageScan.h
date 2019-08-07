@@ -140,9 +140,6 @@ namespace Engine
 
         bool IsLibrarySxS(const std::wstring& dllName, std::wstring& sxsDir);
 
-    private:
-
-        bool IsLibrarySxSInDefaultActx(const std::wstring& dllName, std::wstring& sxsDir);
     };
 
     class LoadManifestAndPush
@@ -192,6 +189,9 @@ namespace Engine
         const System::TokenAccessChecker& GetAccessChecker() const;
 
         ActivationContextStack& GetActivationContextStack();
+
+    private:
+        void LoadDefaultSystemActivationContext();
     };
 
     // =================

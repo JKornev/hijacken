@@ -177,7 +177,11 @@ namespace Engine
             //TODO: remove a '\\' symbol in the end
             _order.emplace_back(ImageDirectory::Type::Environment, dir, access);
             if (wow64mode)
-                _orderWow64.emplace_back(ImageDirectory::Type::Environment, dir, access);
+                _orderWow64.emplace_back(
+                    ImageDirectory::Type::Environment, 
+                    System::FileUtils::ApplyWow64Redirection(dir), 
+                    access
+                );
         }
 
         return;
@@ -338,52 +342,18 @@ namespace Engine
     bool ActivationContextStack::IsLibrarySxS(const std::wstring& dllName, std::wstring& sxsDir)
     {
         if (!_stack.size())
-            return IsLibrarySxSInDefaultActx(dllName, sxsDir);
-
-        const auto& assemblies = *_stack.rbegin();
-        for (const auto& assembly : assemblies)
-            for (const auto& library : assembly.GetFiles())
-                if (dllName == library)
-                {
-                    sxsDir = assembly.GetID();
-                    return true;
-                }
-
-        return IsLibrarySxSInDefaultActx(dllName, sxsDir);
-    }
-
-    bool ActivationContextStack::IsLibrarySxSInDefaultActx(const std::wstring& dllName, std::wstring& sxsDir)
-    {
-        try
-        {
-            //TODO: 
-            //  Unfortunately results are not valid if a scanned DLL has different architecture to hijacken
-            //  because it's not possible to get a Default System Activateion Context for different architecture
-
-            auto dll = System::ActivationContextUtils::LookupSxSDirUsingDefaultSystemActivationContext(dllName);
-
-            if (dll.empty())
-                return false;
-
-            std::wstring assemblyDir;
-            System::FileUtils::ExtractFileDirectory(dll, assemblyDir);
-            std::transform(assemblyDir.begin(), assemblyDir.end(), assemblyDir.begin(), ::tolower);
-
-            auto winsxs = System::SystemInformation::GetWindowsDir();
-            winsxs += L"\\winsxs";
-            std::transform(winsxs.begin(), winsxs.end(), winsxs.begin(), ::tolower);
-
-            if (assemblyDir.find(winsxs) != 0)
-                return false;
-
-            System::FileUtils::ExtractFileName(assemblyDir, sxsDir);
-        }
-        catch (...)
-        {
             return false;
-        }
 
-        return true;
+        for (auto& assemblies = _stack.rbegin(); assemblies != _stack.rend(); assemblies++)
+            for (const auto& assembly : *assemblies)
+                for (const auto& library : assembly.GetFiles())
+                    if (_wcsicmp(dllName.c_str(), library.c_str()) == 0)
+                    {
+                        sxsDir = assembly.GetID();
+                        return true;
+                    }
+
+        return false;
     }
 
     // =================
@@ -447,10 +417,28 @@ namespace Engine
         System::FileUtils::ExtractFileDirectory(_imagePath, _imageDir);
         System::FileUtils::ExtractFileName(_imagePath, _imageFile);
 
+        LoadDefaultSystemActivationContext();
+
         _image.reset(new System::ImageMapping(_imagePath.c_str()));
         PEParser::ImageFactory factory;
         _parser = factory.GetImage(*_image);
         _bitness = _parser->GetBitness();
+    }
+
+    void ImageScanContext::LoadDefaultSystemActivationContext()
+    {
+        auto looking = System::SystemInformation::GetWindowsDir();
+        looking += L"\\WinSxS\\Manifests\\";
+        auto manifest = looking;
+
+        if (_bitness == System::Bitness::Arch64)
+            looking += L"amd64_microsoft.windows.systemcompatible_*";
+        else
+            looking += L"x86_microsoft.windows.systemcompatible_*";
+
+        manifest += System::FileUtils::FindFirstMatchedFile(looking);
+        System::ActivationContext actx(manifest.c_str());
+        _actxStack.Push(actx);
     }
 
     System::ImageMapping ImageScanContext::GetAppImage() const
@@ -566,8 +554,6 @@ namespace Engine
 
                 if (!scannedDlls.InsertOnlyNew(cached))
                     return;
-
-                //TODO: known DLLs have a priority over SxS?
 
                 PerformSxSModuleAction(context, dllName, sxsDir, order);
             }

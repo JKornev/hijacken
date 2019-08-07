@@ -383,7 +383,7 @@ namespace System
     EnvironmentVariablesPtr ProcessEnvironmentBlock::GetProcessEnvironment()
     {
         LoadProcessParameters();
-        
+
         if (!_paramsEnv.size())
             _process->ReadMemory(_params->Environment, _paramsEnv, _params->EnvironmentSize);
 
@@ -508,9 +508,9 @@ namespace System
 
         auto result = ::GetTokenInformation(
             Handle::GetNativeHandle(),
-            TokenIntegrityLevel, 
-            const_cast<char*>(buffer.c_str()), 
-            static_cast<DWORD>(buffer.size()), 
+            TokenIntegrityLevel,
+            const_cast<char*>(buffer.c_str()),
+            static_cast<DWORD>(buffer.size()),
             &written
         );
 
@@ -519,9 +519,9 @@ namespace System
             buffer.resize(written);
             result = ::GetTokenInformation(
                 Handle::GetNativeHandle(),
-                TokenIntegrityLevel, 
-                const_cast<char*>(buffer.c_str()), 
-                static_cast<DWORD>(buffer.size()), 
+                TokenIntegrityLevel,
+                const_cast<char*>(buffer.c_str()),
+                static_cast<DWORD>(buffer.size()),
                 &written
             );
         }
@@ -583,11 +583,11 @@ namespace System
         label.Label.Attributes = SE_GROUP_INTEGRITY;
         label.Label.Sid = sid;
 
-        auto result = ::SetTokenInformation(Handle::GetNativeHandle(), TokenIntegrityLevel, &label, sizeof(label) + ::GetLengthSid(sid));
+        auto result = ::SetTokenInformation(Handle::GetNativeHandle(), TokenIntegrityLevel, &label, sizeof(label)+::GetLengthSid(sid));
         auto error = ::GetLastError();
-        
+
         ::LocalFree(sid);
-        
+
         if (!result)
             throw Utils::Exception(error, L"SetTokenInformation(IntegrityLevel) failed with code %d", error);
     }
@@ -768,18 +768,18 @@ namespace System
 
     // =================
 
-    SecurityDescriptor::SecurityDescriptor(Handle& file) : 
-        _descriptor(nullptr), 
+    SecurityDescriptor::SecurityDescriptor(Handle& file) :
+        _descriptor(nullptr),
         _dacl(nullptr)
     {
         auto result = ::GetSecurityInfo(
             file.GetNativeHandle(),
-            SE_FILE_OBJECT, 
+            SE_FILE_OBJECT,
             DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION,
             &_owner,
-            &_group, 
+            &_group,
             &_dacl,
-            NULL, 
+            NULL,
             &_descriptor
         );
         if (result != ERROR_SUCCESS)
@@ -860,7 +860,7 @@ namespace System
     ImageMapping::ImageMapping(const wchar_t* path) : _mappingSize(0)
     {
         File file(path, GENERIC_READ);
-        
+
         Handle::SetHandle(
             ::CreateFileMappingW(
                 file.GetNativeHandle(),
@@ -932,7 +932,7 @@ namespace System
         auto index = path.rfind('\\');
         if (index == std::wstring::npos)
             directory.clear();
-        else 
+        else
             directory = path.substr(0, index);
     }
 
@@ -949,7 +949,7 @@ namespace System
     {
         std::vector<wchar_t> buffer;
         buffer.resize(MAX_PATH);
-        
+
         for (int i = 0; i < 5; i++)
         {
             wchar_t* output;
@@ -983,7 +983,7 @@ namespace System
     File FileUtils::CreateTempFile(std::wstring& path, DWORD access, DWORD share)
     {
         auto temp = SystemInformation::GetTempDir();
-        
+
         wchar_t name[MAX_PATH] = {};
         if (!::GetTempFileNameW(temp.c_str(), L"tmp", 0, name))
             throw Utils::Exception(::GetLastError(), L"GetTempFileNameW() failed with code %d", ::GetLastError());
@@ -991,6 +991,27 @@ namespace System
         path = name;
 
         return File(path.c_str(), access, share, true);
+    }
+
+    std::wstring FileUtils::ApplyWow64Redirection(const std::wstring& path)
+    {
+        //TODO:
+        // c:\\Windows\\System32 -> c:\\Windows\\SysWow64
+        // c:\\Program Files -> c:\\Program Files (x86)
+        return path;
+    }
+
+    std::wstring FileUtils::FindFirstMatchedFile(const std::wstring& path)
+    {
+        WIN32_FIND_DATAW info;
+
+        auto found = ::FindFirstFileW(path.c_str(), &info);
+        if (found == INVALID_HANDLE_VALUE)
+            throw Utils::Exception(::GetLastError(), L"FindFirstFileW() failed with code %d", ::GetLastError());
+
+        FindClose(found);
+
+        return info.cFileName;
     }
 
     // =================
