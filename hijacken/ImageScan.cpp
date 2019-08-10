@@ -174,7 +174,12 @@ namespace Engine
 
         for (auto& dir : paths)
         {
-            //TODO: remove a '\\' symbol in the end
+            if (dir.empty())
+                continue;
+
+            if (*dir.rbegin() == L'\\')
+                dir.resize(dir.size() - 1);
+
             _order.emplace_back(ImageDirectory::Type::Environment, dir, access);
             if (wow64mode)
                 _orderWow64.emplace_back(
@@ -375,7 +380,6 @@ namespace Engine
         }
         catch (Utils::Exception& e)
         {
-            //std::wcerr << L"eee " << std::endl;//TODO:
         }
 
         if (!tempName.empty())

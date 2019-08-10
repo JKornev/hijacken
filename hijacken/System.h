@@ -290,6 +290,7 @@ namespace System
         static bool PathExists(const std::wstring& path);
         static File CreateTempFile(std::wstring& path, DWORD access = READ_CONTROL, DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
         static std::wstring ApplyWow64Redirection(const std::wstring& path);
+        static bool RedirectDirectory(std::wstring& path, const std::wstring& from, const std::wstring& to);
         static std::wstring FindFirstMatchedFile(const std::wstring& path);
     };
 
@@ -315,6 +316,8 @@ namespace System
         static std::wstring GetSystemDir();
         static std::wstring GetWindowsDir();
         static std::wstring GetTempDir();
+        static std::wstring GetLastGoodSystem32Dir();
+        static std::wstring GetLastGoodSysWow64Dir();
     };
 
     class Wow64NoFsRedirection

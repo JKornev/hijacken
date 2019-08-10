@@ -995,10 +995,36 @@ namespace System
 
     std::wstring FileUtils::ApplyWow64Redirection(const std::wstring& path)
     {
-        //TODO:
-        // c:\\Windows\\System32 -> c:\\Windows\\SysWow64
-        // c:\\Program Files -> c:\\Program Files (x86)
+        std::wstring newPath = path;
+
+        auto sys32dir = SystemInformation::GetSystem32Dir();
+        auto sys64dir = SystemInformation::GetSysWow64Dir();
+        
+        if (RedirectDirectory(newPath, sys32dir, sys64dir))
+            return newPath;
+
+        auto lastgood32dir = SystemInformation::GetLastGoodSystem32Dir();
+        auto lastgood64dir = SystemInformation::GetLastGoodSysWow64Dir();
+        
+        if (RedirectDirectory(newPath, lastgood32dir, lastgood64dir))
+            return newPath;
+
         return path;
+    }
+
+    bool FileUtils::RedirectDirectory(std::wstring& path, const std::wstring& from, const std::wstring& to)
+    {
+        if (_wcsnicmp(path.c_str(), from.c_str(), from.size()) != 0)
+            return false;
+
+        auto newPath = to;
+
+        if (path.size() > from.size())
+            newPath += &path[from.size()];
+
+        path = newPath;
+
+        return true;
     }
 
     std::wstring FileUtils::FindFirstMatchedFile(const std::wstring& path)
@@ -1107,6 +1133,30 @@ namespace System
 
         if (!::GetTempPathW(_countof(buffer), buffer))
             throw Utils::Exception(::GetLastError(), L"GetCurrentDirectoryW() failed with code %d", ::GetLastError());
+
+        return buffer;
+    }
+
+    std::wstring SystemInformation::GetLastGoodSystem32Dir()
+    {
+        wchar_t buffer[MAX_PATH];
+
+        if (!::GetWindowsDirectoryW(buffer, _countof(buffer)))
+            throw Utils::Exception(::GetLastError(), L"GetCurrentDirectoryW() failed with code %d", ::GetLastError());
+
+        wcscat_s(buffer, L"\\lastgood\\System32");
+
+        return buffer;
+    }
+
+    std::wstring SystemInformation::GetLastGoodSysWow64Dir()
+    {
+        wchar_t buffer[MAX_PATH];
+
+        if (!::GetWindowsDirectoryW(buffer, _countof(buffer)))
+            throw Utils::Exception(::GetLastError(), L"GetCurrentDirectoryW() failed with code %d", ::GetLastError());
+
+        wcscat_s(buffer, L"\\lastgood\\SysWOW64");
 
         return buffer;
     }
