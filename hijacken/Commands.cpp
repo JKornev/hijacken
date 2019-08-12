@@ -576,7 +576,7 @@ namespace Commands
                     std::wcout << std::endl;
                 }
             }
-            catch (Utils::Exception& exception)
+            catch (Utils::Exception&)
             {
                 //std::wcout << L"Process with ID " << processId << L" has been skipped, reason: " << exception.GetMessage() << std::endl;
             }

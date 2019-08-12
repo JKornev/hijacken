@@ -142,6 +142,7 @@ namespace PEParser
         System::Bitness GetBitness();
 
         virtual ImportTable LoadImportTable() = 0;
+        virtual ImportTable LoadDelayImportTable() = 0;
         virtual Resources LoadResources() = 0;
     };
 
@@ -171,6 +172,7 @@ namespace PEParser
         virtual ~ImageImpl() = default;
 
         ImportTable LoadImportTable() override;
+        ImportTable LoadDelayImportTable() override;
 
         Resources LoadResources() override;
 

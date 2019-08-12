@@ -346,7 +346,7 @@ namespace PEParser
             return table;
 
         auto imports = reinterpret_cast<PIMAGE_IMPORT_DESCRIPTOR>(Image::GetAddressByRVA(importDirOffset));
-        DWORD importPeakOffset = sizeof(IMAGE_IMPORT_DESCRIPTOR);
+        DWORD importPeakOffset = importDirOffset + sizeof(IMAGE_IMPORT_DESCRIPTOR);
         for (int i = 0; true; i++, importPeakOffset += sizeof(IMAGE_IMPORT_DESCRIPTOR))
         {
             if (importPeakOffset > imageSize)
@@ -356,6 +356,32 @@ namespace PEParser
                 break;
 
             std::string dllname = Image::LoadStringByRVA(imports[i].Name);
+            table.push_back(dllname);
+        }
+
+        return table;
+    }
+
+    template<typename T>
+    ImportTable ImageImpl<T>::LoadDelayImportTable()
+    {
+        ImportTable table;
+        auto imageSize = _mapping.GetSize();
+        auto delayDirOffset = _header->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT].VirtualAddress;
+        if (!delayDirOffset)
+            return table;
+
+        auto imports = reinterpret_cast<PIMAGE_DELAYLOAD_DESCRIPTOR>(Image::GetAddressByRVA(delayDirOffset));
+        DWORD importPeakOffset = delayDirOffset + sizeof(IMAGE_DELAYLOAD_DESCRIPTOR);
+        for (int i = 0; true; i++, importPeakOffset += sizeof(IMAGE_IMPORT_DESCRIPTOR))
+        {
+            if (importPeakOffset > imageSize)
+                throw Utils::Exception(L"Invalid import descriptor table");
+
+            if (!imports[i].DllNameRVA)
+                break;
+
+            std::string dllname = Image::LoadStringByRVA(imports[i].DllNameRVA);
             table.push_back(dllname);
         }
 

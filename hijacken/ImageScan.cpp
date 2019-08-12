@@ -246,7 +246,6 @@ namespace Engine
                 UnwindImports(dll, true);
         };
 
-        //TODO: check is it possible to remove following libs from known list
         loadKnownDll(L"ntdll.dll");
         loadKnownDll(L"kernel32.dll");
         loadKnownDll(L"kernelbase.dll");
@@ -378,7 +377,7 @@ namespace Engine
             );
             stack.Push(context);
         }
-        catch (Utils::Exception& e)
+        catch (Utils::Exception&)
         {
         }
 
@@ -544,7 +543,7 @@ namespace Engine
             std::wstring sxsDir;
             if (actxStack.IsLibrarySxS(dllName, sxsDir))
             {
-                // When we process a SxS DLL we should care that it can have a one short DLL name but multiple paths.
+                // When we process a SxS DLL we should care about multiple paths for the same DLL name.
                 // For instance:
                 //     C:\Windows\winsxs\x86_microsoft.windows.common-controls_6595b64144ccf1df_5.82.7601.18837_none_ec86b8d6858ec0bc\comctl32.dll
                 //     C:\Windows\winsxs\x86_microsoft.windows.common-controls_6595b64144ccf1df_6.0.7601.24460_none_2b1e532a457961ba\comctl32.dll
@@ -577,7 +576,7 @@ namespace Engine
                     PerformExistingModuleAction(context, dllName, dir, order);
             }
         }
-        catch (Utils::Exception& e)
+        catch (Utils::Exception&)
         {
             std::wcout << L"Skipped: Exception while processing the dll '" << dllName << L"'" << std::endl;
         }
@@ -595,18 +594,24 @@ namespace Engine
         if (image->GetBitness() != context.GetAppBitness())
             throw Utils::Exception(L"Image bitness mismatched");
 
-        auto imports = image->LoadImportTable();
-        for (auto& import : imports)
+        auto scan = [&](PEParser::ImportTable& imports)
         {
-            std::wstring importDll(import.begin(), import.end());
-            if (!System::FileUtils::IsPathRelative(importDll))
+            for (auto& import : imports)
             {
-                std::wcout << L"Skipped: Non-relative path of dll '" << importDll << L"'" << std::endl;
-                continue;
-            }
+                std::wstring importDll(import.begin(), import.end());
+                if (!System::FileUtils::IsPathRelative(importDll))
+                {
+                    std::wcout << L"Skipped: Non-relative path of dll '" << importDll << L"'" << std::endl;
+                    continue;
+                }
 
-            ScanModule(context, std::wstring(import.begin(), import.end()), order);
-        }
+                ScanModule(context, std::wstring(import.begin(), import.end()), order);
+            }
+        };
+
+        scan(image->LoadImportTable());
+        if (_scanDelayLoad)
+            scan(image->LoadDelayImportTable());
     }
 
     void ImageScanEngine::PerformExistingModuleAction(ImageScanContext& context, std::wstring& dllName, ImageDirectory& dir, ImageScanOrder& order)
@@ -640,13 +645,6 @@ namespace Engine
 
     void ImageScanEngine::PerformSxSModuleAction(ImageScanContext& context, std::wstring& dllName, std::wstring& sxsDir, ImageScanOrder& order)
     {
-        // Initial Plan:
-        //   0. Push SxS 
-        //   1. Get base dir
-        //   2. Check is it possible to create App.exe.Local or it already existing and writable
-        //   3. If detected notify SxS callback
-        //   4. Unwind if it's enabled
-
         std::vector<const ImageDirectory*> vulnerableDirs;
         auto base = order.GetBaseDir();
 
